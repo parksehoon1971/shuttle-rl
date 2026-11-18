@@ -40,6 +40,8 @@ namespace ShuttleRL
         [Header("Visuals (optional, leave empty for headless training)")]
         public bool buildVisuals = true;
         public RackModels models;
+        [Tooltip("Physically based materials, soft shadows, reflections, floor and post-processing (demo look).")]
+        public bool enhancedLook = true;
 
         public SimWorld World { get; private set; }
         public RackGeometry Geometry { get; private set; }
@@ -99,6 +101,7 @@ namespace ShuttleRL
             string key = $"{cfg.levels}/{cfg.aisles}/{cfg.lanesPerAisle}/{cfg.cellsPerLane}/{World.Layout.Lifts.Count}";
             if (buildVisuals && models != null)
             {
+                RackLook.Enabled = enhancedLook;
                 if (visuals == null)
                 {
                     visuals = new RackVisuals(transform, models);
@@ -106,7 +109,16 @@ namespace ShuttleRL
                     if (hud == null) hud = gameObject.AddComponent<RackHud>(); // no ?? : Unity fake-null
                     hud.env = this;
                 }
-                if (key != layoutKey) { visuals.BuildStatic(World, Geometry); FrameCamera(layoutKey == ""); }
+                if (key != layoutKey)
+                {
+                    visuals.BuildStatic(World, Geometry);
+                    FrameCamera(layoutKey == "");
+                    if (enhancedLook)
+                    {
+                        RackLook.SetupScene(transform, Geometry.RackBounds());
+                        RackLook.FitFloor(transform, Geometry.RackBounds());
+                    }
+                }
                 visuals.EnsureDynamic(World);
             }
             layoutKey = key;

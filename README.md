@@ -29,6 +29,8 @@ git clone https://github.com/parksehoon1971/shuttle-rl.git
    처음에는 규칙 기반 셔틀(Heuristic Only)로 움직입니다. 3층, 레인 6열, 레인당 6셀, 층당 셔틀 3대, 입고/출고 각 130개/h입니다 (규칙 기반으로 약 270개/h 처리).
    `ShuttleRack` 오브젝트의 `Config`에서 층수, 레인 수, 셀 수, 셔틀 수, 입출고량을 바꿀 수 있습니다. 리프트 수는 자동 계산됩니다.
 
+**화질**: Play 하면 금속, 도장, 목재, 골판지 질감의 머티리얼, 부드러운 그림자, 보조광, 반사 프로브, 광택 콘크리트 바닥, 톤매핑과 블룸이 자동으로 적용됩니다 (`ShuttleRack` › `Enhanced Look`으로 끄기). URP 품질 설정 (그림자 4096 / 4단계 / 60 m, MSAA 4x, HDR, SSAO)은 에디터를 열 때 한 번 자동 적용되며, 메뉴 **ShuttleRL → Apply High Quality Look**으로 다시 적용할 수 있습니다.
+
 **Play 중 카메라 조작** (상단 바의 도움말 버튼으로도 볼 수 있습니다)
 | 입력 | 동작 |
 |---|---|

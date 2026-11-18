@@ -58,6 +58,7 @@ namespace ShuttleRL
             go.transform.localRotation = prefab.transform.localRotation;
             go.transform.localScale = prefab.transform.localScale;
             if (name != null) go.name = name;
+            RackLook.ApplyMaterials(go);   // physically based materials instead of the plain FBX ones
             return go;
         }
 
