@@ -77,7 +77,7 @@ namespace ShuttleRL
                             if (L.X(cell) < L.Lanes - 1)
                             {
                                 var ar = Spawn(m.aisleRail, levelRoot, p + new Vector3(c.pitchAisle / 2f, 0, 0));
-                                if (ar != null) ar.transform.localScale = new Vector3((c.pitchAisle - 1.02f) / c.pitchAisle, 1, 1);
+                                if (ar != null) ar.transform.localScale = Vector3.Scale(ar.transform.localScale, new Vector3((c.pitchAisle - 1.02f) / c.pitchAisle, 1, 1));
                             }
                             break;
                         case CellType.PD:
@@ -159,8 +159,12 @@ namespace ShuttleRL
             for (int i = 0; i < w.Shuttles.Count && i < shuttles.Count; i++)
             {
                 var s = w.Shuttles[i]; var v = shuttles[i];
-                Vector3 a = g.Cell(s.fromCell, s.level), b = g.Cell(s.toCell, s.level);
-                v.t.localPosition = Vector3.Lerp(a, b, w.MoveProgress(s, now));
+                if (w.LinePose(s, now, out int origin, out int toward, out float pos))
+                {
+                    Vector3 o = g.Cell(origin, s.level), dir = (g.Cell(toward, s.level) - o).normalized;
+                    v.t.localPosition = o + dir * pos;   // continuous accelerate / cruise / brake along the line
+                }
+                else v.t.localPosition = g.Cell(s.cell, s.level);
                 float jack = w.JackHeight(s, now);
                 if (v.jack) v.jack.localPosition = v.jack0 + Up(v.jack, jack * RackGeometry.JackStroke);
                 if (v.wheelsX) v.wheelsX.localPosition = v.wx0 + Up(v.wheelsX, s.axis == 0 ? 0 : wheelDrop);

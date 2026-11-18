@@ -12,7 +12,7 @@ namespace ShuttleRL
     ///
     /// Behavior Parameters (set by the ShuttleRL menu, or by hand):
     ///   Behavior Name  = Shuttle
-    ///   Vector Observation Space Size = SimWorld.ObsSize (308), Stacked Vectors = 1
+    ///   Vector Observation Space Size = SimWorld.ObsSize (309), Stacked Vectors = 1
     ///   Actions: Discrete, 1 branch, size 6  (0 wait, 1 +X, 2 -X, 3 +Y, 4 -Y, 5 jack up/down)
     ///   Behavior Type: Default for training, Heuristic Only for the rule-based baseline,
     ///                  Inference Only with a trained .onnx model.

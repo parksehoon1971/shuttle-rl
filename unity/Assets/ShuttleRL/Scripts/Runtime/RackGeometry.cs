@@ -21,7 +21,7 @@ namespace ShuttleRL
         public RackGeometry(RackConfig cfg, RackLayout layout)
         {
             this.cfg = cfg; this.layout = layout;
-            y0 = GaugeHalf + 0.01f;
+            y0 = cfg.aisleHalfWidth;
             blockDepth = 2f * (y0 + cfg.cellsPerLane * cfg.pitchLane) + 0.6f;
         }
 

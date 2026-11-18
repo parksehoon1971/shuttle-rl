@@ -54,6 +54,7 @@ class Program
                         reward += w.TakeGroupReward();
                         if (w.Deadlocked && Environment.GetEnvironmentVariable("DEBUG_DEADLOCK") == "1")
                         {
+                            for (int l = 0; l < w.Cfg.levels; l++) for (int cc = 0; cc < w.Layout.CellCount; cc++) if (w.Occ[l][cc] >= 0) Console.WriteLine($"    occ L{l} ({w.Layout.X(cc)},{w.Layout.GY(cc)}) by S{w.Occ[l][cc]}");
                             foreach (var s in w.Shuttles)
                             {
                                 int t = w.TargetCell(s);
@@ -98,6 +99,13 @@ class Program
                 if (w.Layout.Type[s.cell] == CellType.None) { err = "shuttle off rail"; return false; }
             }
         }
+        for (int l = 0; l < w.Cfg.levels; l++)
+            for (int c = 0; c < w.Layout.CellCount; c++)
+            {
+                int o = w.Occ[l][c]; if (o < 0) continue;
+                var sh = w.Shuttles[o];
+                if (c != sh.cell && c != sh.toCell && !sh.releases.Any(r => r.cell == c)) { err = $"leaked cell ({w.Layout.X(c)},{w.Layout.GY(c)}) by S{o} at ({w.Layout.X(sh.cell)},{w.Layout.GY(sh.cell)}) act={sh.act} t={w.Time:F2} inMotion={sh.inMotion}"; return false; }
+            }
         // pallet conservation: initial + arrived = in rack + carried + lifts + inbound queue + shipped
         int inRack = CountPallets(w);
         int carried = w.Shuttles.Count(s => s.loaded);

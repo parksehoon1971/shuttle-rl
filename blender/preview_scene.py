@@ -27,7 +27,7 @@ def inst(name, loc, rot_z=0.0, scale=(1, 1, 1)):
 
 LEVELS, LANES, CELLS = 2, 3, 3
 H = D["level"]["height"]; PA = D["cell"]["pitch_aisle"]; PL = D["cell"]["pitch_lane"]
-g = D["rail"]["gauge_half"]; y0 = g + 0.01
+g = D["rail"]["gauge_half"]; y0 = D["cell"]["aisle_half"]
 base = 0.0
 occupied = {(0, 0, 1, 2), (0, 1, -1, 0), (1, 2, 1, 1), (1, 0, -1, 2), (0, 2, 1, 0)}
 for lv in range(LEVELS):

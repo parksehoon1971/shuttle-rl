@@ -6,7 +6,7 @@ namespace ShuttleRL.Core
     public enum TaskKind { Inbound, Outbound }
     public enum TaskPhase { Waiting, Released, ToPick, ToDrop, Done }
     public enum PDState { Free, ReservedIn, OccupiedIn, ReservedOut, OccupiedOut }
-    public enum ShuttleAct { Idle, Wait, Move, JackUp, JackDown }
+    public enum ShuttleAct { Idle, Wait, Move, Brake, JackUp, JackDown }
 
     public class ShuttleTask
     {
@@ -28,6 +28,17 @@ namespace ShuttleRL.Core
         public int lastDist = -1, blockedCount, yieldWait;
         public double lastDecision;
         public double busyTime;
+
+        // ---- continuous motion along a straight line (see SimWorld.StartRun) ----
+        public bool inMotion;          // awaiting a decision at the braking point while still rolling
+        public int moveDir = -1;       // direction of the current straight line
+        public int pendingAction = -1; // action to execute after braking to a stop
+        public int lineOrigin = -1;    // cell where the straight line started; positions are meters from its center
+        public float runStartPos, runDist, runV0, runVPeak, runAccel, runS1, runS2;
+        public double runT0;           // time the shuttle starts rolling (after wheel switching)
+        public float speed;            // speed at the current decision point
+        public readonly List<(int cell, float pos)> releases = new List<(int, float)>(); // cells to free once passed
+        public double nextRelease = double.MaxValue;
     }
 
     public class Lift
@@ -60,7 +71,7 @@ namespace ShuttleRL.Core
     public class SimWorld
     {
         public const int ActionCount = 6; // 0 wait, 1 +X, 2 -X, 3 +Y, 4 -Y, 5 handle (jack up/down)
-        public const int Win = 7, WinR = 3, WinCh = 6, StateSize = 14;
+        public const int Win = 7, WinR = 3, WinCh = 6, StateSize = 15;
         public const int ObsSize = StateSize + Win * Win * WinCh;
 
         // reward constants
@@ -152,7 +163,7 @@ namespace ShuttleRL.Core
         double NextEventTime()
         {
             double t = Math.Min(nextArrival, nextOrder);
-            foreach (var s in Shuttles) if (s.act != ShuttleAct.Idle) t = Math.Min(t, s.actEnd);
+            foreach (var s in Shuttles) { if (s.act != ShuttleAct.Idle) t = Math.Min(t, s.actEnd); t = Math.Min(t, s.nextRelease); }
             foreach (var l in Lifts) if (l.phase != 0) t = Math.Min(t, l.phaseEnd);
             return Math.Min(t, Cfg.episodeSeconds);
         }
@@ -160,7 +171,10 @@ namespace ShuttleRL.Core
         void ProcessEvents()
         {
             foreach (var s in Shuttles)
+            {
+                if (s.nextRelease <= Time + 1e-9) ProcessReleases(s, false);
                 if (s.act != ShuttleAct.Idle && s.actEnd <= Time + 1e-9) CompleteShuttle(s);
+            }
             foreach (var l in Lifts)
                 if (l.phase != 0 && l.phaseEnd <= Time + 1e-9) AdvanceLift(l);
             while (nextArrival <= Time)
@@ -387,33 +401,141 @@ namespace ShuttleRL.Core
             if (s.task != null) s.reward += rTimePerSec * (float)(Time - s.lastDecision);
             s.lastDecision = Time;
             s.actStart = Time;
+            if (s.inMotion)
+            {
+                // decision taken at the braking point; the shuttle is logically at s.cell already
+                s.inMotion = false;
+                if (a == s.moveDir + 1)
+                {
+                    int n = Layout.Neighbor(s.cell, s.moveDir);
+                    if (n >= 0 && PassableFor(s, n) && Occ[s.level][n] < 0) { ContinueRun(s, n); return; }
+                }
+                // anything else: brake to a stop at s.cell, then do it
+                s.pendingAction = a; s.act = ShuttleAct.Brake; s.actEnd = RunEndTime(s);
+                return;
+            }
+            Execute(s, a, true);
+        }
+
+        /// <summary>Execute an action from standstill. penalize=false when it was queued while braking.</summary>
+        void Execute(Shuttle s, int a, bool penalize)
+        {
+            s.actStart = Time;
             if (a >= 1 && a <= 4)
             {
                 int d = a - 1, n = Layout.Neighbor(s.cell, d);
                 bool ok = n >= 0 && PassableFor(s, n);
-                if (ok && Occ[s.level][n] >= 0) { ok = false; Stats.collisionAttempts++; }
+                if (ok && Occ[s.level][n] >= 0) { ok = false; if (penalize) Stats.collisionAttempts++; }
                 if (ok)
                 {
                     int newAxis = Dir.IsX(d) ? 0 : 1;
                     double sw = newAxis != s.axis ? Cfg.wheelSwitchTime : 0;
-                    float pitch = Dir.IsX(d) ? Cfg.pitchAisle : Cfg.pitchLane;
-                    if (Dir.IsX(d) && (Layout.Type[s.cell] == CellType.PD || Layout.Type[n] == CellType.PD))
-                        pitch = (Cfg.pitchAisle + Cfg.carriageLength) / 2f;
-                    double mv = RackConfig.TravelTime(pitch, s.loaded ? Cfg.shuttleSpeedLoaded : Cfg.shuttleSpeedEmpty, Cfg.shuttleAccel);
                     s.axis = newAxis; s.switchEnd = Time + sw;
+                    s.moveDir = d; s.lineOrigin = s.cell;
+                    float step = StepDistance(s.cell, n, d);
                     s.fromCell = s.cell; s.toCell = n; Occ[s.level][n] = s.id;
-                    s.act = ShuttleAct.Move; s.actEnd = Time + sw + mv;
+                    s.releases.Clear(); s.releases.Add((s.cell, step * 0.5f));
+                    StartRun(s, 0f, step, 0f, Time + sw);
                     return;
                 }
-                Invalid(s); return;
+                if (penalize) Invalid(s); else s.awaiting = true;
+                return;
             }
             if (a == 5)
             {
                 if (CanPick(s)) { s.act = ShuttleAct.JackUp; s.actEnd = Time + Cfg.jackTime; return; }
                 if (CanDrop(s)) { s.act = ShuttleAct.JackDown; s.actEnd = Time + Cfg.jackTime; return; }
-                Invalid(s); return;
+                if (penalize) Invalid(s); else s.awaiting = true;
+                return;
             }
+            if (!penalize) { s.awaiting = true; return; } // "wait" chosen while rolling = just stop
             s.act = ShuttleAct.Wait; s.actEnd = Time + Cfg.waitTime;
+        }
+
+        /// <summary>Real distance between neighboring cells (matches the 3D layout).</summary>
+        float StepDistance(int from, int to, int d)
+        {
+            if (Dir.IsX(d))
+                return (Layout.Type[from] == CellType.PD || Layout.Type[to] == CellType.PD)
+                    ? (Cfg.pitchAisle + Cfg.carriageLength) / 2f : Cfg.pitchAisle;
+            return (Layout.Type[from] == CellType.Junction || Layout.Type[to] == CellType.Junction)
+                ? Cfg.aisleHalfWidth + Cfg.pitchLane / 2f : Cfg.pitchLane;
+        }
+
+        /// <summary>
+        /// Plan a straight segment from line position 'from' (speed v0) that stops after 'dist' meters:
+        /// accelerate to vPeak, cruise, brake. The next decision is requested at the braking point, so if
+        /// the agent keeps the same direction the shuttle rolls on without stopping (no stop-and-go per cell).
+        /// </summary>
+        void StartRun(Shuttle s, float from, float dist, float v0, double t0)
+        {
+            float vmax = s.loaded ? Cfg.shuttleSpeedLoaded : Cfg.shuttleSpeedEmpty, acc = Cfg.shuttleAccel;
+            float vp = (float)Math.Min(vmax, Math.Sqrt((2 * acc * dist + v0 * v0) / 2));
+            if (vp < v0) vp = v0;
+            float s1 = (vp * vp - v0 * v0) / (2 * acc), s3 = vp * vp / (2 * acc);
+            float s2 = Math.Max(0, dist - s1 - s3);
+            s.runStartPos = from; s.runDist = dist; s.runV0 = v0; s.runVPeak = vp; s.runAccel = acc;
+            s.runS1 = s1; s.runS2 = s2; s.runT0 = t0;
+            s.act = ShuttleAct.Move;
+            s.actEnd = t0 + (vp - v0) / acc + (vp > 0 ? s2 / vp : 0); // braking point
+            ScheduleRelease(s);
+        }
+
+        double RunEndTime(Shuttle s)
+        {
+            float acc = s.runAccel, vp = s.runVPeak;
+            return s.runT0 + (vp - s.runV0) / acc + (vp > 0 ? s.runS2 / vp : 0) + vp / acc;
+        }
+
+        /// <summary>Distance travelled in the current segment at time t.</summary>
+        float RunDistance(Shuttle s, double t)
+        {
+            double tau = t - s.runT0;
+            if (tau <= 0) return 0;
+            float acc = s.runAccel, v0 = s.runV0, vp = s.runVPeak;
+            double t1 = (vp - v0) / acc, t2 = vp > 0 ? s.runS2 / vp : 0, t3 = vp / acc;
+            double d;
+            if (tau < t1) d = v0 * tau + 0.5 * acc * tau * tau;
+            else if (tau < t1 + t2) d = s.runS1 + vp * (tau - t1);
+            else { double u = Math.Min(tau - t1 - t2, t3); d = s.runS1 + s.runS2 + vp * u - 0.5 * acc * u * u; }
+            return (float)Math.Min(d, s.runDist);
+        }
+
+        /// <summary>Position (meters from the line origin's center) at time t while moving.</summary>
+        public float LinePosition(Shuttle s, double t) { return s.runStartPos + RunDistance(s, t); }
+
+        void ScheduleRelease(Shuttle s)
+        {
+            s.nextRelease = double.MaxValue;
+            if (s.releases.Count == 0) return;
+            float target = s.releases[0].pos - s.runStartPos;
+            double lo = s.runT0, hi = RunEndTime(s);
+            if (RunDistance(s, hi) < target) return; // released when a later segment passes it
+            for (int i = 0; i < 40; i++) { double mid = (lo + hi) / 2; if (RunDistance(s, mid) >= target) hi = mid; else lo = mid; }
+            s.nextRelease = Math.Max(Time, hi);
+        }
+
+        void ProcessReleases(Shuttle s, bool all)
+        {
+            while (s.releases.Count > 0 && (all || s.nextRelease <= Time + 1e-9))
+            {
+                int c = s.releases[0].cell; s.releases.RemoveAt(0);
+                if (c == s.cell && s.toCell != s.cell) s.cell = s.toCell; // past the midpoint: logically in the next cell
+                if (Occ[s.level][c] == s.id && c != s.cell) Occ[s.level][c] = -1;
+                if (!all) ScheduleRelease(s);
+            }
+            if (all || s.releases.Count == 0) s.nextRelease = double.MaxValue;
+        }
+
+        void ContinueRun(Shuttle s, int next)
+        {
+            float here = LinePosition(s, Time);
+            float endPos = s.runStartPos + s.runDist;
+            float step = StepDistance(s.cell, next, s.moveDir);
+            s.fromCell = s.cell; s.toCell = next; Occ[s.level][next] = s.id;
+            s.releases.Add((s.cell, endPos + step * 0.5f)); // free the cell we roll through once half past it
+            s.cell = next;
+            StartRun(s, here, endPos + step - here, s.runVPeak, Time);
         }
 
         void Invalid(Shuttle s)
@@ -430,7 +552,17 @@ namespace ShuttleRL.Core
             s.act = ShuttleAct.Idle; s.awaiting = true;
             if (act == ShuttleAct.Move)
             {
-                Occ[s.level][s.fromCell] = -1; s.cell = s.toCell; s.fromCell = s.cell; Stats.moves++;
+                // braking point reached: decide now whether to roll on or stop at the target cell
+                s.cell = s.toCell; s.inMotion = true; s.speed = s.runVPeak; Stats.moves++;
+                s.act = ShuttleAct.Move; // still rolling (time is frozen until the decision arrives)
+                s.actEnd = double.MaxValue;
+            }
+            else if (act == ShuttleAct.Brake)
+            {
+                ProcessReleases(s, true);
+                s.fromCell = s.cell; s.speed = 0; s.moveDir = -1;
+                int a = s.pendingAction; s.pendingAction = -1;
+                if (a >= 0) { s.awaiting = false; Execute(s, a, false); }
             }
             else if (act == ShuttleAct.JackUp)
             {
@@ -538,6 +670,7 @@ namespace ShuttleRL.Core
                 hint = HintDirection(s);
             }
             if (hint >= 0) o[10 + hint] = 1;
+            o[14] = s.inMotion ? s.speed / Math.Max(0.1f, Cfg.shuttleSpeedEmpty) : 0f;
             int k = StateSize;
             int cx = Layout.GX(s.cell), cy = Layout.GY(s.cell);
             for (int dy = -WinR; dy <= WinR; dy++)
@@ -676,16 +809,17 @@ namespace ShuttleRL.Core
         }
 
         // ------------------------------------------------------------------ helpers for views
-        /// <summary>0..1 progress of the current move (after wheel switching), for interpolation.</summary>
-        public float MoveProgress(Shuttle s, double now)
+        /// <summary>
+        /// Pose on a straight line for visuals: when it returns true the shuttle center is 'pos' meters from
+        /// the center of cell 'origin' toward cell 'toward'; otherwise it stands at its cell.
+        /// </summary>
+        public bool LinePose(Shuttle s, double now, out int origin, out int toward, out float pos)
         {
-            if (s.act != ShuttleAct.Move) return 0f;
-            if (now <= s.switchEnd) return 0f;
-            double span = s.actEnd - s.switchEnd;
-            if (span <= 0) return 1f;
-            double p = (now - s.switchEnd) / span;
-            p = Math.Max(0, Math.Min(1, p));
-            return (float)(p * p * (3 - 2 * p)); // ease in/out
+            origin = s.lineOrigin; pos = 0f;
+            toward = s.moveDir >= 0 && origin >= 0 ? Layout.Neighbor(origin, s.moveDir) : -1;
+            if ((s.act != ShuttleAct.Move && s.act != ShuttleAct.Brake) || toward < 0) return false;
+            pos = LinePosition(s, Math.Max(now, s.runT0));
+            return true;
         }
 
         public float JackHeight(Shuttle s, double now)

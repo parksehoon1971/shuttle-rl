@@ -16,7 +16,8 @@
   },
   "cell": {
     "pitch_lane": 1.3,
-    "pitch_aisle": 1.4
+    "pitch_aisle": 1.4,
+    "aisle_half": 0.7
   },
   "level": {
     "height": 1.6

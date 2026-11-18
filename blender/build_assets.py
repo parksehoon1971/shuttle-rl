@@ -35,7 +35,7 @@ D = {
         "track_w": 0.065, "track_t": 0.010,   # inner bottom flange (wheel track)
         "ledge_w": 0.080, "ledge_t": 0.010,   # outer top ledge (pallet support)
     },
-    "cell": {"pitch_lane": 1.30, "pitch_aisle": 1.40},  # cell length along lane, lane pitch along aisle
+    "cell": {"pitch_lane": 1.30, "pitch_aisle": 1.40, "aisle_half": 0.70},  # aisle_half: aisle center to first lane cell (pallet clears uprights)  # cell length along lane, lane pitch along aisle
     "level": {"height": 1.60},
     "shuttle": {"w": 0.96, "l": 0.96, "body_bottom": 0.03, "body_top": 0.18,
                  "jack_t": 0.010, "jack_stroke": 0.040, "wheel_r": 0.040,
@@ -232,6 +232,12 @@ def build_junction():
     box("Inset", (2 * (g - R["track_w"]), 2 * (g - R["track_w"]), R["track_t"] + 0.001), (0, 0, R["track_t"] / 2), "steel", coll, root)
     for i, (sx, sy) in enumerate(((-1, -1), (-1, 1), (1, -1), (1, 1))):
         box(f"CornerWeb_{i}", (0.06, 0.06, R["height"]), (sx * (g + 0.03), sy * (g + 0.03), R["height"] / 2), "rail", coll, root)
+    # short lane rails bridging the junction to the first lane cell (aisle is wider than the rail gauge)
+    stub = D["cell"]["aisle_half"] - (g + 0.01)
+    if stub > 0.001:
+        for sy in (-1, 1):
+            sub = empty(f"LaneStub_{'N' if sy < 0 else 'P'}", coll, root, (0, sy * (g + 0.01 + stub / 2), 0))
+            rail_pair(f"LS{'N' if sy < 0 else 'P'}", stub, "Y", coll, sub, ledge=False)
     return root
 
 def build_pd_station():

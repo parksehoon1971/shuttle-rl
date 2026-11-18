@@ -26,6 +26,7 @@ namespace ShuttleRL.Core
         // ---- Geometry (match blender/dimensions.json) ------------------------------
         public float pitchAisle = 1.40f;  // lane-to-lane distance along the aisle
         public float pitchLane = 1.30f;   // cell length inside a lane
+        public float aisleHalfWidth = 0.70f; // aisle center to first lane cell edge (clears a 1.1 m pallet past the uprights)
         public float levelHeight = 1.60f;
         public float carriageLength = 1.40f;
 
