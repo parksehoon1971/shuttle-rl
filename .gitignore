@@ -1,0 +1,21 @@
+# Unity (project lives in unity/)
+unity/[Ll]ibrary/
+unity/[Tt]emp/
+unity/[Oo]bj/
+unity/[Bb]uild/
+unity/[Bb]uilds/
+unity/[Ll]ogs/
+unity/[Uu]ser[Ss]ettings/
+unity/*.csproj
+unity/*.sln
+unity/.vs/
+# ML-Agents results
+results/
+summaries/
+# .NET / Python
+tools/CoreSim/bin/
+tools/CoreSim/obj/
+__pycache__/
+*.pyc
+# Blender backups
+*.blend1

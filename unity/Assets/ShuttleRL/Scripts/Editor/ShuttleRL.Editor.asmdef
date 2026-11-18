@@ -1,0 +1,20 @@
+{
+    "name": "ShuttleRL.Editor",
+    "rootNamespace": "ShuttleRL.Editor",
+    "references": [
+        "ShuttleRL.Core",
+        "ShuttleRL.Runtime",
+        "Unity.ML-Agents"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

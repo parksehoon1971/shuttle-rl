@@ -1,0 +1,52 @@
+{
+  "pallet": {
+    "w": 1.1,
+    "d": 1.1,
+    "h": 0.15,
+    "load_h": 1.0
+  },
+  "rail": {
+    "gauge_half": 0.495,
+    "web_t": 0.01,
+    "height": 0.2,
+    "track_w": 0.065,
+    "track_t": 0.01,
+    "ledge_w": 0.08,
+    "ledge_t": 0.01
+  },
+  "cell": {
+    "pitch_lane": 1.3,
+    "pitch_aisle": 1.4
+  },
+  "level": {
+    "height": 1.6
+  },
+  "shuttle": {
+    "w": 0.96,
+    "l": 0.96,
+    "body_bottom": 0.03,
+    "body_top": 0.18,
+    "jack_t": 0.01,
+    "jack_stroke": 0.04,
+    "wheel_r": 0.04,
+    "wheel_shift": 0.015
+  },
+  "roller": {
+    "r": 0.03,
+    "pitch": 0.1,
+    "len": 0.08
+  },
+  "lift": {
+    "carriage_l": 1.4,
+    "carriage_w": 1.3,
+    "mast_offset": 0.78
+  },
+  "conveyor": {
+    "l": 1.3,
+    "w": 1.2
+  },
+  "upright": {
+    "size": 0.1
+  },
+  "axis_note": "Blender X=aisle, Y=lane, Z=up. Unity (after FBX import): X=aisle, Z=lane, Y=up."
+}

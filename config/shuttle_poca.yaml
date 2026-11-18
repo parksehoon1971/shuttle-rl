@@ -1,0 +1,75 @@
+# ML-Agents (Python ml-agents 1.1.0) training config for the shuttle rack.
+#   mlagents-learn config/shuttle_poca.yaml --run-id=shuttle_v1                 (Unity Editor: press Play when asked)
+#   mlagents-learn config/shuttle_poca.yaml --run-id=shuttle_v1 --env=Builds/ShuttleRL --no-graphics --num-envs=4
+# MA-POCA: shuttles on a rack share one policy and one group reward (cooperation, not competition).
+behaviors:
+  Shuttle:
+    trainer_type: poca
+    hyperparameters:
+      batch_size: 2048
+      buffer_size: 20480
+      learning_rate: 0.0003
+      learning_rate_schedule: linear
+      beta: 0.005
+      epsilon: 0.2
+      lambd: 0.95
+      num_epoch: 3
+    network_settings:
+      normalize: false
+      hidden_units: 256      # small network: PyTorch is CPU-only on this PC
+      num_layers: 2
+    reward_signals:
+      extrinsic:
+        gamma: 0.995
+        strength: 1.0
+    keep_checkpoints: 5
+    checkpoint_interval: 500000
+    max_steps: 20000000
+    time_horizon: 256
+    summary_freq: 20000
+
+# Curriculum: start with a small, sparse rack and grow it. Lessons advance by training progress
+# (fraction of max_steps), so no reward threshold has to be guessed up front.
+environment_parameters:
+  levels: 2                  # shuttles stay on their level, so more levels only add lift traffic
+  aisles:
+    curriculum:
+      - name: OneAisle
+        completion_criteria: { measure: progress, behavior: Shuttle, threshold: 0.6 }
+        value: 1
+      - name: TwoAisles
+        value: 2
+  lanes:
+    curriculum:
+      - name: Small
+        completion_criteria: { measure: progress, behavior: Shuttle, threshold: 0.15 }
+        value: 3
+      - name: Medium
+        completion_criteria: { measure: progress, behavior: Shuttle, threshold: 0.35 }
+        value: 6
+      - name: Large
+        value: { sampler_type: uniform, sampler_parameters: { min_value: 4, max_value: 10 } }
+  cells:
+    curriculum:
+      - name: Small
+        completion_criteria: { measure: progress, behavior: Shuttle, threshold: 0.15 }
+        value: 4
+      - name: Medium
+        completion_criteria: { measure: progress, behavior: Shuttle, threshold: 0.35 }
+        value: 6
+      - name: Large
+        value: { sampler_type: uniform, sampler_parameters: { min_value: 4, max_value: 10 } }
+  shuttles_per_level:
+    curriculum:
+      - name: Two
+        completion_criteria: { measure: progress, behavior: Shuttle, threshold: 0.15 }
+        value: 2
+      - name: Three
+        completion_criteria: { measure: progress, behavior: Shuttle, threshold: 0.35 }
+        value: 3
+      - name: Varied
+        value: { sampler_type: uniform, sampler_parameters: { min_value: 2, max_value: 4 } }
+  inbound_per_hour: { sampler_type: uniform, sampler_parameters: { min_value: 30, max_value: 150 } }
+  outbound_per_hour: { sampler_type: uniform, sampler_parameters: { min_value: 30, max_value: 150 } }
+  initial_fill: { sampler_type: uniform, sampler_parameters: { min_value: 0.3, max_value: 0.7 } }
+  episode_seconds: 1800

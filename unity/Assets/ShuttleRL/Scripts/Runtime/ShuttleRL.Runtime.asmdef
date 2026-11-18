@@ -1,0 +1,17 @@
+{
+    "name": "ShuttleRL.Runtime",
+    "rootNamespace": "ShuttleRL",
+    "references": [
+        "ShuttleRL.Core",
+        "Unity.ML-Agents"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
