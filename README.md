@@ -24,7 +24,7 @@
 git clone https://github.com/parksehoon1971/shuttle-rl.git
 ```
 1. Unity Hub → **Add project from disk** → 받은 폴더 안의 `unity` 폴더를 선택해 Unity 6000.6.8f1로 엽니다.
-2. 처음 열 때 한 번만 **Window → Package Manager**에서 ML-Agents(`com.unity.ml-agents`)를 설치합니다. 지금 쓰시는 프로젝트와 같은 버전이면 됩니다.
+2. ML-Agents는 `unity/Packages/manifest.json`에 들어 있어서 프로젝트를 열면 자동으로 설치됩니다 (agv-rl-center와 같은 `release/4.0.3`, GitHub에서 받으므로 PC에 git이 있어야 합니다).
 3. 메뉴 **ShuttleRL → Create Demo Scene (1 rack, 3D)** 을 누르고 Play 합니다.
    처음에는 규칙 기반 셔틀(Heuristic Only)로 움직입니다. 3층, 레인 6열, 레인당 6셀, 층당 셔틀 2대입니다.
    `ShuttleRack` 오브젝트의 `Config`에서 층수, 레인 수, 셀 수, 셔틀 수, 입출고량을 바꿀 수 있습니다. 리프트 수는 자동 계산됩니다.
@@ -36,6 +36,8 @@ git pull
 Unity를 켜 둔 상태여도 됩니다. 창으로 돌아오면 스크립트와 모델이 다시 불러와집니다. `Library/`, `Temp/`, `results/` 같은 생성 폴더는 `.gitignore`로 제외되어 있어서 pull 할 때 충돌하지 않습니다.
 
 기존 Unity 프로젝트에서 쓰고 싶으면 `unity/Assets/ShuttleRL` 폴더를 그 프로젝트의 `Assets`에 복사해도 되지만, 그 경우 업데이트는 다시 복사해야 합니다.
+
+Hub의 "Built-In Render Pipeline 지원 중단" 경고와 Input Manager 경고는 실행을 막지 않습니다. 이 프로젝트는 키보드 입력을 쓰지 않고, 학습은 화면 없이 돌기 때문에 지금은 Built-In 그대로 둡니다.
 
 ## 2. 학습
 1. 새 씬에서 **ShuttleRL → Create Training Scene (8 racks, headless)** 를 실행하고 씬을 저장합니다.
