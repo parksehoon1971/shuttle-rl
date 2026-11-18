@@ -88,10 +88,22 @@ namespace ShuttleRL
             if (buildVisuals && models != null)
             {
                 if (visuals == null) visuals = new RackVisuals(transform, models);
-                if (key != layoutKey) visuals.BuildStatic(World, Geometry);
+                if (key != layoutKey) { visuals.BuildStatic(World, Geometry); FrameCamera(layoutKey == ""); }
                 visuals.EnsureDynamic(World);
             }
             layoutKey = key;
+        }
+
+        /// <summary>Give the main camera mouse/keyboard controls and aim it at this rack.</summary>
+        void FrameCamera(bool resetView)
+        {
+            var cam = Camera.main;
+            if (cam == null) return;
+            var ctl = cam.GetComponent<RackCameraController>();
+            if (ctl == null) ctl = cam.gameObject.AddComponent<RackCameraController>();
+            var b = Geometry.RackBounds();
+            b.center = transform.TransformPoint(b.center);
+            ctl.Frame(b, resetView);
         }
 
         void ApplyEnvironmentParameters(RackConfig c)

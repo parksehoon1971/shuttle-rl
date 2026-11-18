@@ -59,6 +59,18 @@ namespace ShuttleRL
             return new Vector3(x, LevelY(level), AisleZ(site.aisle));
         }
 
+        /// <summary>Approximate bounds of the whole rack (local to the environment root) for camera framing.</summary>
+        public Bounds RackBounds()
+        {
+            float minX = -(cfg.pitchAisle / 2f + 2.5f * cfg.carriageLength) - 2.6f; // lift + floor conveyors
+            float maxX = (layout.Lanes - 1) * cfg.pitchAisle + cfg.pitchAisle / 2f + 0.5f;
+            float laneDepth = y0 + cfg.cellsPerLane * cfg.pitchLane;
+            float minZ = -laneDepth, maxZ = (cfg.aisles - 1) * blockDepth + laneDepth;
+            var b = new Bounds();
+            b.SetMinMax(new Vector3(minX, 0, minZ), new Vector3(maxX, cfg.levels * cfg.levelHeight, maxZ));
+            return b;
+        }
+
         /// <summary>Direction pointing from the P&amp;D away from the rack (where the floor conveyor goes).</summary>
         public float OutwardSign(LiftSite site) { return site.end == 0 ? -1f : 1f; }
     }
