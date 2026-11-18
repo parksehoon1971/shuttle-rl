@@ -3,6 +3,7 @@ using Unity.MLAgents.Actuators;
 using Unity.MLAgents.Policies;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace ShuttleRL.Editor
 {
@@ -14,6 +15,7 @@ namespace ShuttleRL.Editor
         [MenuItem("ShuttleRL/Create Demo Scene (1 rack, 3D)")]
         public static void CreateDemo()
         {
+            RemoveExisting();
             var template = CreateAgentTemplate(BehaviorType.HeuristicOnly);
             var env = CreateRack("ShuttleRack", Vector3.zero, template, true);
             env.config = new RackConfig { levels = 3, aisles = 1, lanesPerAisle = 6, cellsPerLane = 6, shuttlesPerLevel = 2, inboundPerHour = 90, outboundPerHour = 90 };
@@ -23,7 +25,7 @@ namespace ShuttleRL.Editor
             if (cam == null) { cam = new GameObject("Main Camera").AddComponent<Camera>(); cam.tag = "MainCamera"; }
             cam.transform.position = new Vector3(14f, 11f, -14f);
             cam.transform.LookAt(new Vector3(3.5f, 1.5f, 0f));
-            if (Object.FindFirstObjectByType<Light>() == null)
+            if (!HasRoot<Light>())
             {
                 var light = new GameObject("Sun").AddComponent<Light>();
                 light.type = LightType.Directional; light.transform.rotation = Quaternion.Euler(50, -30, 0);
@@ -36,6 +38,7 @@ namespace ShuttleRL.Editor
         [MenuItem("ShuttleRL/Create Training Scene (8 racks, headless)")]
         public static void CreateTraining()
         {
+            RemoveExisting();
             var template = CreateAgentTemplate(BehaviorType.Default);
             for (int i = 0; i < 8; i++)
             {
@@ -44,6 +47,21 @@ namespace ShuttleRL.Editor
                 env.baseSeed = i * 100000;
             }
             Debug.Log("ShuttleRL training scene created. Build it (or press Play) and run mlagents-learn with config/shuttle_poca.yaml.");
+        }
+
+        /// <summary>Running a menu item again replaces the racks and agent templates instead of adding more.</summary>
+        static void RemoveExisting()
+        {
+            foreach (var go in SceneManager.GetActiveScene().GetRootGameObjects())
+                if (go.GetComponent<RackEnvironment>() != null || go.GetComponent<ShuttleAgent>() != null)
+                    Undo.DestroyObjectImmediate(go);
+        }
+
+        static bool HasRoot<T>() where T : Component
+        {
+            foreach (var go in SceneManager.GetActiveScene().GetRootGameObjects())
+                if (go.GetComponentInChildren<T>(true) != null) return true;
+            return false;
         }
 
         static ShuttleAgent CreateAgentTemplate(BehaviorType type)
