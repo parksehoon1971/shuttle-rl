@@ -175,6 +175,39 @@ namespace ShuttleRL
             return parent != null ? parent.InverseTransformVector(Vector3.up * d) : Vector3.up * d;
         }
 
+        readonly HashSet<int> skip = new HashSet<int>();
+        Dictionary<int, Vector3> shown = new Dictionary<int, Vector3>();     // last drawn position of conveyor pallets
+        Dictionary<int, Vector3> nextShown = new Dictionary<int, Vector3>();
+        double lastSync = -1;
+
+        static Vector3 ConveyorSlot(SimWorld w, RackGeometry g, LiftSite site, int slot)
+        {
+            float sgn = g.OutwardSign(site);
+            return g.Lift(site, 0) + new Vector3(sgn * (w.Cfg.carriageLength / 2f + 1.3f * (slot + 0.5f)), RackGeometry.RailHeight, 0);
+        }
+
+        /// <summary>0..1 progress of the roller transfer in lift phases 2 and 4 (conveying first, then positioning).</summary>
+        static float TransferProgress(SimWorld w, Lift lift, double now)
+        {
+            double convey = Mathf.Max(0.1f, (w.Cfg.carriageLength + 1.3f / 2f) / Mathf.Max(0.05f, w.Cfg.conveySpeed));
+            double span = System.Math.Min(convey, System.Math.Max(0.1, lift.phaseEnd - lift.phaseStart));
+            float k = (float)System.Math.Max(0, System.Math.Min(1, (now - lift.phaseStart) / span));
+            return k * k * (3f - 2f * k);
+        }
+
+        /// <summary>Moves a pallet toward its target at conveyor speed (simulated time) instead of jumping.</summary>
+        Vector3 Smooth(int pallet, Vector3 target, SimWorld w, double now, bool queue, float outward = 0f)
+        {
+            if (!shown.TryGetValue(pallet, out var cur))
+                cur = queue ? target + new Vector3(outward * 1.3f, 0, 0) : target; // new arrival rolls in from outside
+            double dt = lastSync < 0 || now < lastSync ? 0 : now - lastSync;
+            float maxStep = (float)(dt * System.Math.Max(0.05f, w.Cfg.conveySpeed) * 1.5);
+            if (lastSync >= 0 && now < lastSync) cur = target; // episode reset
+            var next = (cur - target).sqrMagnitude < 9f ? Vector3.MoveTowards(cur, target, maxStep) : target;
+            nextShown[pallet] = next;
+            return next;
+        }
+
         public void Sync(SimWorld w, RackGeometry g)
         {
             if (dynamicRoot == null) return;
@@ -199,30 +232,70 @@ namespace ShuttleRL
                 if (carrying)
                     PalletAt(p++, s.carried >= 0 ? s.carried : w.PalletAt[s.level][s.cell]).localPosition = v.t.localPosition + Vector3.up * (RackGeometry.RailHeight + jack * (RackGeometry.JackStroke - 0.01f));
             }
+            // lifts: a pallet rolls between the floor conveyor / P&D and the carriage instead of jumping
+            skip.Clear();
+            var convPos = new Vector3[w.Lifts.Count];
+            var convBusy = new bool[w.Lifts.Count];
+            for (int i = 0; i < w.Lifts.Count && i < carriages.Count; i++)
+            {
+                var lift = w.Lifts[i];
+                var site = lift.site;
+                var pos = g.Lift(site, w.LiftLevel(lift, now));
+                carriages[i].localPosition = pos;
+                Vector3 onCar = pos + Vector3.up * RackGeometry.RailHeight;
+                convPos[i] = ConveyorSlot(w, g, site, 0);
+                float k = TransferProgress(w, lift, now);
+                int pal = -1; Vector3 at = onCar;
+                if (!lift.outboundJob && lift.pallet >= 0)
+                {
+                    pal = lift.pallet;
+                    if (lift.phase == 1) { at = convPos[i]; convBusy[i] = true; }                  // waits at the conveyor end
+                    else if (lift.phase == 2) { at = Vector3.Lerp(convPos[i], onCar, k); convBusy[i] = true; } // rolls in
+                    else if (lift.phase == 4) at = Vector3.Lerp(onCar, g.Cell(site.pdCell, lift.targetLevel) + Vector3.up * RackGeometry.RailHeight, k); // rolls onto the P&D
+                }
+                else if (lift.outboundJob)
+                {
+                    if (lift.phase == 2)
+                    {
+                        pal = w.PalletAt[lift.targetLevel][site.pdCell];  // still on the P&D in the simulation
+                        if (pal >= 0)
+                        {
+                            skip.Add(pal);
+                            at = Vector3.Lerp(g.Cell(site.pdCell, lift.targetLevel) + Vector3.up * RackGeometry.RailHeight, onCar, k);
+                        }
+                    }
+                    else if (lift.pallet >= 0 && lift.phase >= 3)
+                    {
+                        pal = lift.pallet;
+                        if (lift.phase == 4) { at = Vector3.Lerp(onCar, convPos[i], k); convBusy[i] = true; } // rolls out
+                    }
+                }
+                if (pal >= 0)
+                {
+                    if (!lift.outboundJob && lift.phase == 1) at = Smooth(pal, at, w, now, false); // may come from another conveyor slot
+                    else nextShown[pal] = at;
+                    PalletAt(p++, pal).localPosition = at;
+                }
+            }
             // pallets stored in cells and on P&D stations (hidden while a shuttle is jacking them up)
             for (int lv = 0; lv < w.Cfg.levels; lv++)
             {
                 var arr = w.PalletAt[lv];
                 for (int c = 0; c < arr.Length; c++)
-                    if (arr[c] >= 0) PalletAt(p++, arr[c]).localPosition = g.Cell(c, lv) + Vector3.up * RackGeometry.RailHeight;
+                    if (arr[c] >= 0 && !skip.Contains(arr[c])) PalletAt(p++, arr[c]).localPosition = g.Cell(c, lv) + Vector3.up * RackGeometry.RailHeight;
             }
-            // lifts
-            for (int i = 0; i < w.Lifts.Count && i < carriages.Count; i++)
-            {
-                var lift = w.Lifts[i];
-                var pos = g.Lift(lift.site, w.LiftLevel(lift, now));
-                carriages[i].localPosition = pos;
-                if (w.LiftHasPallet(lift)) PalletAt(p++, lift.pallet).localPosition = pos + Vector3.up * RackGeometry.RailHeight;
-            }
-            // inbound queue: show up to two pallets on each lift's floor conveyor
+            // inbound queue: up to two pallets on each lift's floor conveyor; they roll forward as the queue moves
             int lift0 = 0, slot = 0;
             foreach (var item in w.InboundQueue)
             {
                 if (lift0 >= w.Lifts.Count) break;
-                var site = w.Lifts[lift0].site; float sgn = g.OutwardSign(site);
-                PalletAt(p++, item.pallet).localPosition = g.Lift(site, 0) + new Vector3(sgn * (w.Cfg.carriageLength / 2f + 1.3f * (slot + 0.5f)), RackGeometry.RailHeight, 0);
-                if (++slot == 2) { slot = 0; lift0++; }
+                int s0 = convBusy[lift0] ? 1 : 0;   // slot 0 is taken by a pallet entering / leaving the lift
+                var target = ConveyorSlot(w, g, w.Lifts[lift0].site, s0 + slot);
+                PalletAt(p++, item.pallet).localPosition = Smooth(item.pallet, target, w, now, true, g.OutwardSign(w.Lifts[lift0].site));
+                if (++slot >= 2 - s0) { slot = 0; lift0++; }
             }
+            lastSync = now;
+            var tmp = shown; shown = nextShown; nextShown = tmp; nextShown.Clear();
             for (int i = p; i < pallets.Count; i++) { slotPallet[i] = -1; if (pallets[i].gameObject.activeSelf) pallets[i].gameObject.SetActive(false); }
         }
     }
