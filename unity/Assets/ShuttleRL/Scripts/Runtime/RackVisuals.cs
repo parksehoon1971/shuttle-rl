@@ -12,6 +12,13 @@ namespace ShuttleRL
                           conveyor, upright, beam, pallet, palletLoad, shuttle;
     }
 
+    /// <summary>Marks a clickable object for the HUD (shuttle index or pallet pool slot).</summary>
+    public class RackSelectable : MonoBehaviour
+    {
+        public bool isShuttle;
+        public int index;
+    }
+
     /// <summary>Builds the static rack from the layout and moves shuttles, lifts and pallets every frame.</summary>
     public class RackVisuals
     {
@@ -21,6 +28,17 @@ namespace ShuttleRL
         readonly List<ShuttleView> shuttles = new List<ShuttleView>();
         readonly List<Transform> carriages = new List<Transform>();
         readonly List<Transform> pallets = new List<Transform>();
+        readonly List<int> slotPallet = new List<int>();   // pallet id shown by each pool slot this frame
+
+        public int ShuttleCount => shuttles.Count;
+        public Transform ShuttleTransform(int i) { return i >= 0 && i < shuttles.Count ? shuttles[i].t : null; }
+        public int SlotPallet(int slot) { return slot >= 0 && slot < slotPallet.Count ? slotPallet[slot] : -1; }
+        /// <summary>Transform currently showing the pallet, or null.</summary>
+        public Transform PalletTransform(int pallet)
+        {
+            for (int i = 0; i < slotPallet.Count; i++) if (slotPallet[i] == pallet && pallets[i].gameObject.activeSelf) return pallets[i];
+            return null;
+        }
 
         class ShuttleView
         {
@@ -54,7 +72,7 @@ namespace ShuttleRL
         {
             if (staticRoot != null) Object.Destroy(staticRoot.gameObject);
             if (dynamicRoot != null) Object.Destroy(dynamicRoot.gameObject);
-            shuttles.Clear(); carriages.Clear(); pallets.Clear();
+            shuttles.Clear(); carriages.Clear(); pallets.Clear(); slotPallet.Clear();
             staticRoot = new GameObject("RackStatic").transform; staticRoot.SetParent(root, false);
             dynamicRoot = new GameObject("RackDynamic").transform; dynamicRoot.SetParent(root, false);
             var c = w.Cfg; var L = w.Layout;
@@ -117,8 +135,13 @@ namespace ShuttleRL
         {
             while (shuttles.Count < w.Shuttles.Count)
             {
-                var go = Spawn(m.shuttle, dynamicRoot, Vector3.zero, $"Shuttle_{shuttles.Count}") ?? new GameObject("Shuttle");
-                var v = new ShuttleView { t = go.transform, jack = Find(go.transform, "Jack"), wheelsX = Find(go.transform, "WheelsX"), wheelsY = Find(go.transform, "WheelsY") };
+                // unrotated wrapper (collider, selection) with the imported model inside
+                var wrap = new GameObject($"Shuttle_{shuttles.Count}");
+                wrap.transform.SetParent(dynamicRoot, false);
+                var col = wrap.AddComponent<BoxCollider>(); col.center = new Vector3(0, 0.12f, 0); col.size = new Vector3(0.96f, 0.24f, 0.96f);
+                var tag = wrap.AddComponent<RackSelectable>(); tag.isShuttle = true; tag.index = shuttles.Count;
+                var go = Spawn(m.shuttle, wrap.transform, Vector3.zero) ?? wrap;
+                var v = new ShuttleView { t = wrap.transform, jack = Find(go.transform, "Jack"), wheelsX = Find(go.transform, "WheelsX"), wheelsY = Find(go.transform, "WheelsY") };
                 if (v.jack) v.jack0 = v.jack.localPosition;
                 if (v.wheelsX) v.wx0 = v.wheelsX.localPosition;
                 if (v.wheelsY) v.wy0 = v.wheelsY.localPosition;
@@ -127,7 +150,7 @@ namespace ShuttleRL
             for (int i = 0; i < shuttles.Count; i++) shuttles[i].t.gameObject.SetActive(i < w.Shuttles.Count);
         }
 
-        Transform PalletAt(int index)
+        Transform PalletAt(int index, int pallet)
         {
             while (pallets.Count <= index)
             {
@@ -135,9 +158,12 @@ namespace ShuttleRL
                 go.transform.SetParent(dynamicRoot, false);
                 Spawn(m.pallet, go.transform, Vector3.zero);
                 Spawn(m.palletLoad, go.transform, new Vector3(0, RackGeometry.PalletHeight, 0));
-                pallets.Add(go.transform);
+                var col = go.AddComponent<BoxCollider>(); col.center = new Vector3(0, 0.58f, 0); col.size = new Vector3(1.1f, 1.15f, 1.1f);
+                var tag = go.AddComponent<RackSelectable>(); tag.isShuttle = false; tag.index = pallets.Count;
+                pallets.Add(go.transform); slotPallet.Add(-1);
             }
             var t = pallets[index];
+            slotPallet[index] = pallet;
             if (!t.gameObject.activeSelf) t.gameObject.SetActive(true);
             return t;
         }
@@ -171,14 +197,14 @@ namespace ShuttleRL
                 if (v.wheelsY) v.wheelsY.localPosition = v.wy0 + Up(v.wheelsY, s.axis == 1 ? 0 : wheelDrop);
                 bool carrying = s.loaded || s.act == ShuttleAct.JackDown;
                 if (carrying)
-                    PalletAt(p++).localPosition = v.t.localPosition + Vector3.up * (RackGeometry.RailHeight + jack * (RackGeometry.JackStroke - 0.01f));
+                    PalletAt(p++, s.carried >= 0 ? s.carried : w.PalletAt[s.level][s.cell]).localPosition = v.t.localPosition + Vector3.up * (RackGeometry.RailHeight + jack * (RackGeometry.JackStroke - 0.01f));
             }
             // pallets stored in cells and on P&D stations (hidden while a shuttle is jacking them up)
             for (int lv = 0; lv < w.Cfg.levels; lv++)
             {
                 var arr = w.PalletAt[lv];
                 for (int c = 0; c < arr.Length; c++)
-                    if (arr[c] >= 0) PalletAt(p++).localPosition = g.Cell(c, lv) + Vector3.up * RackGeometry.RailHeight;
+                    if (arr[c] >= 0) PalletAt(p++, arr[c]).localPosition = g.Cell(c, lv) + Vector3.up * RackGeometry.RailHeight;
             }
             // lifts
             for (int i = 0; i < w.Lifts.Count && i < carriages.Count; i++)
@@ -186,17 +212,18 @@ namespace ShuttleRL
                 var lift = w.Lifts[i];
                 var pos = g.Lift(lift.site, w.LiftLevel(lift, now));
                 carriages[i].localPosition = pos;
-                if (w.LiftHasPallet(lift)) PalletAt(p++).localPosition = pos + Vector3.up * RackGeometry.RailHeight;
+                if (w.LiftHasPallet(lift)) PalletAt(p++, lift.pallet).localPosition = pos + Vector3.up * RackGeometry.RailHeight;
             }
             // inbound queue: show up to two pallets on each lift's floor conveyor
-            int q = w.InboundQueue.Count;
-            for (int i = 0; i < w.Lifts.Count && q > 0; i++)
+            int lift0 = 0, slot = 0;
+            foreach (var item in w.InboundQueue)
             {
-                var site = w.Lifts[i].site; float s = g.OutwardSign(site);
-                for (int j = 0; j < 2 && q > 0; j++, q--)
-                    PalletAt(p++).localPosition = g.Lift(site, 0) + new Vector3(s * (w.Cfg.carriageLength / 2f + 1.3f * (j + 0.5f)), RackGeometry.RailHeight, 0);
+                if (lift0 >= w.Lifts.Count) break;
+                var site = w.Lifts[lift0].site; float sgn = g.OutwardSign(site);
+                PalletAt(p++, item.pallet).localPosition = g.Lift(site, 0) + new Vector3(sgn * (w.Cfg.carriageLength / 2f + 1.3f * (slot + 0.5f)), RackGeometry.RailHeight, 0);
+                if (++slot == 2) { slot = 0; lift0++; }
             }
-            for (int i = p; i < pallets.Count; i++) if (pallets[i].gameObject.activeSelf) pallets[i].gameObject.SetActive(false);
+            for (int i = p; i < pallets.Count; i++) { slotPallet[i] = -1; if (pallets[i].gameObject.activeSelf) pallets[i].gameObject.SetActive(false); }
         }
     }
 }

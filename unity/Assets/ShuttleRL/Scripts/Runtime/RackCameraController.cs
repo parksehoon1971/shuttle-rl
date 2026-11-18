@@ -104,7 +104,7 @@ namespace ShuttleRL
             var style = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, fontSize = 13, wordWrap = false };
             style.normal.textColor = Color.white;
             var size = style.CalcSize(new GUIContent(text));
-            GUI.Box(new Rect(10, 10, size.x + 12, size.y + 8), text, style);
+            GUI.Box(new Rect(10, Screen.height - size.y - 18, size.x + 12, size.y + 8), text, style); // bottom-left, clear of the HUD
         }
     }
 }

@@ -42,6 +42,7 @@ namespace ShuttleRL
         public SimWorld World { get; private set; }
         public RackGeometry Geometry { get; private set; }
         public int Episode { get; private set; }
+        public RackVisuals Visuals => visuals;
 
         readonly List<ShuttleAgent> agents = new List<ShuttleAgent>();
         SimpleMultiAgentGroup group;
@@ -79,6 +80,7 @@ namespace ShuttleRL
             if (useEnvironmentParameters) ApplyEnvironmentParameters(cfg);
             cfg.seed = baseSeed + Episode * 7919 + instanceIndex * 104729;
             if (World == null) World = new SimWorld(cfg); else World.Reset(cfg);
+            World.LogEvents = buildVisuals && models != null; // event list for the HUD (off while training)
             Geometry = new RackGeometry(World.Cfg, World.Layout);
             EnsureAgents(World.Shuttles.Count);
             pending = 0;
@@ -87,7 +89,13 @@ namespace ShuttleRL
             string key = $"{cfg.levels}/{cfg.aisles}/{cfg.lanesPerAisle}/{cfg.cellsPerLane}/{World.Layout.Lifts.Count}";
             if (buildVisuals && models != null)
             {
-                if (visuals == null) visuals = new RackVisuals(transform, models);
+                if (visuals == null)
+                {
+                    visuals = new RackVisuals(transform, models);
+                    var hud = GetComponent<RackHud>();
+                    if (hud == null) hud = gameObject.AddComponent<RackHud>(); // no ?? : Unity fake-null
+                    hud.env = this;
+                }
                 if (key != layoutKey) { visuals.BuildStatic(World, Geometry); FrameCamera(layoutKey == ""); }
                 visuals.EnsureDynamic(World);
             }

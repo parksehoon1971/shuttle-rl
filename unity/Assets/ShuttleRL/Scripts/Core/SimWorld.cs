@@ -86,6 +86,30 @@ namespace ShuttleRL.Core
         public readonly Queue<(int pallet, double t)> InboundQueue = new Queue<(int, double)>();
         public readonly SimStats Stats = new SimStats();
         public float GroupReward;      // consumed by the caller
+
+        // ---- event log for the HUD (off while training) ----
+        public struct SimEvent { public double time; public string text; public int shuttle, pallet; }
+        public bool LogEvents;
+        public int MaxEvents = 300;
+        public readonly List<SimEvent> Events = new List<SimEvent>();
+        public int EventSerial { get; private set; }
+        void Log(string text, int shuttle = -1, int pallet = -1)
+        {
+            if (!LogEvents) return;
+            Events.Add(new SimEvent { time = Time, text = text, shuttle = shuttle, pallet = pallet });
+            if (Events.Count > MaxEvents) Events.RemoveAt(0);
+            EventSerial++;
+        }
+        public string CellName(int cell)
+        {
+            if (cell < 0) return "-";
+            var t = Layout.Type[cell];
+            if (t == CellType.PD) return $"P&D(통로{Layout.Block[cell] + 1})";
+            int ya = Layout.AisleRow(Layout.Block[cell]);
+            if (t == CellType.Junction) return $"통로{Layout.Block[cell] + 1}-열{Layout.X(cell) + 1}";
+            int k = Layout.GY(cell) - ya;
+            return $"열{Layout.X(cell) + 1}-{(k < 0 ? "좌" : "우")}{Math.Abs(k)}";
+        }
         public bool Deadlocked { get; private set; }
         public bool Done => Deadlocked || Time >= Cfg.episodeSeconds;
 
@@ -113,7 +137,7 @@ namespace ShuttleRL.Core
             bfsBuf = new int[n]; bfsQueue = new int[n];
             PalletAt = new int[L][]; Reserved = new bool[L][]; Occ = new int[L][]; PD = new PDState[L][]; PDReady = new double[L][];
             Time = 0; nextPallet = 0; nextTask = 0; Deadlocked = false; GroupReward = 0; lastProgress = 0;
-            Shuttles.Clear(); Lifts.Clear(); Tasks.Clear(); InboundQueue.Clear(); outboundWaiting.Clear(); Stats.Reset();
+            Shuttles.Clear(); Lifts.Clear(); Tasks.Clear(); InboundQueue.Clear(); outboundWaiting.Clear(); Stats.Reset(); outboundCreated.Clear(); Events.Clear();
             for (int l = 0; l < L; l++)
             {
                 PalletAt[l] = new int[n]; Reserved[l] = new bool[n]; Occ[l] = new int[n];
@@ -179,6 +203,7 @@ namespace ShuttleRL.Core
                 if (l.phase != 0 && l.phaseEnd <= Time + 1e-9) AdvanceLift(l);
             while (nextArrival <= Time)
             {
+                Log($"입고 도착 P{nextPallet} (대기 {InboundQueue.Count + 1})", -1, nextPallet);
                 InboundQueue.Enqueue((nextPallet++, nextArrival)); Stats.inboundArrived++;
                 Stats.maxInboundQueue = Math.Max(Stats.maxInboundQueue, InboundQueue.Count);
                 nextArrival += Exp(Cfg.inboundPerHour);
@@ -190,6 +215,7 @@ namespace ShuttleRL.Core
             if (work && Time - lastProgress > Cfg.deadlockSeconds && !Deadlocked)
             {
                 Deadlocked = true; Stats.deadlocks++; GroupReward += rDeadlock;
+                Log("교착 발생: 셔틀이 오랫동안 파렛트를 옮기지 못함");
             }
             if (!work) lastProgress = Time;
         }
@@ -212,6 +238,7 @@ namespace ShuttleRL.Core
             var t = new ShuttleTask { id = nextTask++, kind = TaskKind.Outbound, level = p.l, pickCell = p.c, dropCell = -1,
                 pallet = PalletAt[p.l][p.c], phase = TaskPhase.Waiting, created = Time };
             outboundWaiting.Add(t); Stats.outboundOrdered++;
+            Log($"출고 지시 P{t.pallet} ({p.l + 1}층 {CellName(p.c)})", -1, t.pallet);
         }
 
         void Dispatch()
@@ -245,6 +272,7 @@ namespace ShuttleRL.Core
                     if (s.level == t.level && s.task == null && bfsBuf[s.cell] < bestD && bfsBuf[s.cell] < (1 << 20)) { bestD = bfsBuf[s.cell]; best = s; }
                 if (best == null) continue;
                 t.phase = TaskPhase.ToPick; t.shuttle = best.id; best.task = t; best.lastDist = -1;
+                Log($"S{best.id} 작업 배정: {(t.kind == TaskKind.Inbound ? "입고" : "출고")} P{t.pallet} → {CellName(t.dropCell)}", best.id, t.pallet);
             }
         }
 
@@ -279,6 +307,7 @@ namespace ShuttleRL.Core
             lift.task = new ShuttleTask { id = nextTask++, kind = TaskKind.Inbound, level = bestL, pickCell = lift.site.pdCell,
                 dropCell = bestCell, lift = li, pallet = item.pallet, phase = TaskPhase.Waiting, created = item.t };
             lift.outboundJob = false; lift.targetLevel = bestL; lift.pallet = item.pallet;
+            Log($"리프트{li + 1} 입고 P{item.pallet} → {bestL + 1}층", -1, item.pallet);
             BeginLiftPhase(lift, 1, lift.level, 0);
         }
 
@@ -337,6 +366,7 @@ namespace ShuttleRL.Core
                     if (lift.outboundJob)
                     {
                         Stats.outboundShipped++;
+                        Log($"출고 완료 P{lift.pallet} (리프트{li + 1})", -1, lift.pallet);
                         if (outboundCreated.TryGetValue(lift.pallet, out double c)) { Stats.outboundCycleSum += Time - c; outboundCreated.Remove(lift.pallet); }
                     }
                     else
@@ -346,6 +376,7 @@ namespace ShuttleRL.Core
                         if (occ >= 0 && Shuttles[occ].loaded) { lift.phaseEnd = Time + 1.0; return; } // wait until the P&D is clear
                         PalletAt[l][lift.site.pdCell] = lift.pallet; PD[l][li] = PDState.OccupiedIn;
                         lift.task.phase = TaskPhase.Released; Tasks.Add(lift.task); lift.task = null;
+                        Log($"리프트{li + 1} P{lift.pallet} {l + 1}층 P&D 도착", -1, lift.pallet);
                     }
                     lift.pallet = -1; lift.phase = 0;
                     StartLiftJob(lift);
@@ -571,6 +602,7 @@ namespace ShuttleRL.Core
                 if (t.kind == TaskKind.Inbound) PD[s.level][t.lift] = PDState.Free;
                 else Reserved[s.level][s.cell] = false;
                 t.phase = TaskPhase.ToDrop; s.lastDist = -1; s.reward += rPick;
+                Log($"S{s.id} 들기 P{s.carried} @ {CellName(s.cell)}", s.id, s.carried);
             }
             else if (act == ShuttleAct.JackDown)
             {
@@ -585,6 +617,7 @@ namespace ShuttleRL.Core
                     PD[s.level][t.lift] = PDState.OccupiedOut; PDReady[s.level][t.lift] = Time;
                     outboundCreated[PalletAt[s.level][s.cell]] = t.created;
                 }
+                Log($"S{s.id} 내리기 P{PalletAt[s.level][s.cell]} @ {CellName(s.cell)}" + (t.kind == TaskKind.Inbound ? " (입고 완료)" : ""), s.id, PalletAt[s.level][s.cell]);
                 t.phase = TaskPhase.Done; Tasks.Remove(t); s.task = null; s.lastDist = -1;
                 s.reward += rDrop; GroupReward += rGroupTask;
             }
@@ -843,6 +876,30 @@ namespace ShuttleRL.Core
             if (l.pallet < 0) return false;
             if (l.outboundJob) return l.phase >= 3;
             return l.phase >= 3 || l.phase == 2;
+        }
+
+        /// <summary>Current speed (m/s) for display.</summary>
+        public float CurrentSpeed(Shuttle s, double now)
+        {
+            if (s.act != ShuttleAct.Move && s.act != ShuttleAct.Brake) return 0f;
+            double t = Math.Max(now, s.runT0);
+            return Math.Max(0f, (RunDistance(s, t + 0.05) - RunDistance(s, t)) / 0.05f);
+        }
+
+        /// <summary>Where a pallet is now, for display. Returns false if it is no longer in the system.</summary>
+        public bool FindPallet(int pallet, out string where, out int level, out ShuttleTask task)
+        {
+            task = null; level = -1; where = null;
+            foreach (var t in Tasks) if (t.pallet == pallet) task = t;
+            foreach (var t in outboundWaiting) if (t.pallet == pallet) task = t;
+            foreach (var l in Lifts) if (l.task != null && l.task.pallet == pallet) task = l.task;
+            for (int lv = 0; lv < Cfg.levels; lv++)
+                for (int c = 0; c < Layout.CellCount; c++)
+                    if (PalletAt[lv][c] == pallet) { level = lv; where = CellName(c); return true; }
+            foreach (var s in Shuttles) if (s.carried == pallet) { level = s.level; where = $"셔틀 S{s.id} 위"; return true; }
+            for (int i = 0; i < Lifts.Count; i++) if (Lifts[i].pallet == pallet) { where = $"리프트{i + 1}"; return true; }
+            foreach (var q in InboundQueue) if (q.pallet == pallet) { level = 0; where = "입고 컨베이어 대기"; return true; }
+            return false;
         }
 
         public float Utilization()
