@@ -26,8 +26,14 @@ namespace ShuttleRL
         public float leftWidth = 300f, rightWidth = 340f, eventsHeight = 220f;
         public Color outlineColor = new Color(1f, 0.72f, 0.1f, 1f);
 
-        enum Sel { None, Shuttle, Pallet }
+        enum Sel { None, Shuttle, Pallet, Lift }
         Sel sel; int selId = -1;
+        int selPalletKind = -1;    // last known job of the selected pallet: 0 inbound, 1 outbound (kept after it ships)
+
+        // cargo tracking: automatically select and follow the next inbound / outbound pallet through its whole journey
+        enum Track { Off, Inbound, Outbound }
+        Track track;
+        float trackDoneAt = -1f;
         int rightTab;              // 0 dashboard, 1 properties
         bool onlySelected;
         Vector2 leftScroll, dashScroll, propScroll, eventScroll;
@@ -37,7 +43,7 @@ namespace ShuttleRL
 
         Texture2D panelTex, ctrlTex, pillTex, circleTex, barTex;
         GUIStyle panelShape, ctrlShape, titleStyle, headStyle, labelStyle, valueStyle, valueRight, smallStyle, eventStyle, timeStyle, bigStyle,
-                 btnText, btnTextOn, btnTextOff;
+                 btnText, btnTextOn, btnTextOff, btnTextOffLeft;
         GUISkin skin;
 
         const float Pad = 10f, BarH = 52f, FoldH = 40f;
@@ -62,7 +68,7 @@ namespace ShuttleRL
             get
             {
                 float x1 = showRight ? Screen.width - Pad * 2 - rightWidth : Screen.width - Pad;
-                return new Rect(x1 - 400f, Top0, 400f, 190f);
+                return new Rect(x1 - 440f, Top0, 440f, 230f);
             }
         }
 
@@ -100,8 +106,11 @@ namespace ShuttleRL
                 cam.blockDrag = dragFromHud;
                 cam.blockKeys = GUIUtility.keyboardControl != 0;
             }
+            UpdateTracking(env.World);
+            var selT = SelectedTransform();
+            if (cam != null && cam.followMode != RackCameraController.FollowMode.Off) cam.follow = selT; // pallets may change pool slot
             outline.color = outlineColor;
-            outline.SetTarget(SelectedTransform());
+            outline.SetTarget(selT);
         }
 
         void OnDisable() { outline.Clear(); }
@@ -111,6 +120,7 @@ namespace ShuttleRL
         {
             if (sel == Sel.Shuttle) return env.Visuals.ShuttleTransform(selId);
             if (sel == Sel.Pallet) return env.Visuals.PalletTransform(selId);
+            if (sel == Sel.Lift) return env.Visuals.LiftTransform(selId);
             return null;
         }
 
@@ -129,28 +139,119 @@ namespace ShuttleRL
         void Pick(Vector3 mouse)
         {
             var cam = Camera.main; if (cam == null) return;
-            if (!Physics.Raycast(cam.ScreenPointToRay(mouse), out var hit, 1000f)) return;
-            var tag = hit.collider.GetComponentInParent<RackSelectable>();
-            if (tag == null) return;
+            RackSelectable tag = null;
+            if (Physics.Raycast(cam.ScreenPointToRay(mouse), out var hit, 1000f)) tag = hit.collider.GetComponentInParent<RackSelectable>();
+            int pid = tag != null && !tag.isShuttle && !tag.isLift ? env.Visuals.SlotPallet(tag.index) : -1;
+            if (tag == null || (!tag.isShuttle && !tag.isLift && pid < 0)) { ClearSelection(); return; } // empty space: back to the environment
+            track = Track.Off;
             if (tag.isShuttle) Select(Sel.Shuttle, tag.index);
-            else
-            {
-                int pid = env.Visuals.SlotPallet(tag.index);
-                if (pid >= 0) Select(Sel.Pallet, pid);
-            }
+            else if (tag.isLift) Select(Sel.Lift, tag.index);
+            else Select(Sel.Pallet, pid);
         }
 
         void Select(Sel kind, int id)
         {
+            if (kind != sel || id != selId) selPalletKind = -1;
             sel = kind; selId = id; rightTab = 1; showRight = true;
             var cam = Cam;
-            if (cam != null && cam.follow != null) cam.Follow(SelectedTransform(), cam.distance); // keep following the new pick
+            if (cam != null && cam.followMode != RackCameraController.FollowMode.Off) cam.follow = SelectedTransform(); // keep following the new pick
         }
 
         void ClearSelection()
         {
-            sel = Sel.None; selId = -1;
-            var cam = Cam; if (cam != null) cam.follow = null;
+            sel = Sel.None; selId = -1; selPalletKind = -1;
+            track = Track.Off;
+            var cam = Cam; if (cam != null) cam.StopFollow();
+        }
+
+        void SetFollow(RackCameraController.FollowMode mode)
+        {
+            var cam = Cam; if (cam == null) return;
+            cam.Follow(SelectedTransform(), mode);
+        }
+
+        // ------------------------------------------------------------------ cargo tracking
+        void StartTracking(Track t)
+        {
+            track = t; trackDoneAt = -1f;
+            if (t == Track.Off) return;
+            sel = Sel.None; selId = -1;   // pick the next pallet right away
+            var cam = Cam;
+            if (cam != null && cam.followMode == RackCameraController.FollowMode.Off) cam.Follow(null, RackCameraController.FollowMode.Overview);
+        }
+
+        void UpdateTracking(SimWorld w)
+        {
+            if (track == Track.Off) return;
+            bool inbound = track == Track.Inbound;
+            if (sel == Sel.Pallet)
+            {
+                int stage = PalletStage(w, selId, inbound ? 0 : 1);
+                if (stage < 4) { trackDoneAt = -1f; return; }
+                if (trackDoneAt < 0f) trackDoneAt = Time.unscaledTime;
+                if (Time.unscaledTime - trackDoneAt < 2.5f) return;   // show the finished journey for a moment
+            }
+            int next = inbound ? NextInbound(w) : NextOutbound(w);
+            if (next < 0) return;
+            trackDoneAt = -1f;
+            Select(Sel.Pallet, next);
+            selPalletKind = inbound ? 0 : 1;
+            var cam = Cam;
+            if (cam != null && cam.followMode == RackCameraController.FollowMode.Off) cam.Follow(SelectedTransform(), RackCameraController.FollowMode.Overview);
+        }
+
+        /// <summary>Next inbound pallet to watch: one rolling into a lift first, then the head of the queue, then any inbound job.</summary>
+        static int NextInbound(SimWorld w)
+        {
+            foreach (var l in w.Lifts) if (!l.outboundJob && l.pallet >= 0 && l.phase <= 2) return l.pallet;
+            foreach (var q in w.InboundQueue) return q.pallet;
+            foreach (var l in w.Lifts) if (!l.outboundJob && l.pallet >= 0) return l.pallet;
+            foreach (var t in w.Tasks) if (t.kind == TaskKind.Inbound) return t.pallet;
+            return -1;
+        }
+
+        /// <summary>Next outbound pallet to watch: one a shuttle is about to fetch first, then released and waiting orders.</summary>
+        static int NextOutbound(SimWorld w)
+        {
+            foreach (var t in w.Tasks) if (t.kind == TaskKind.Outbound && t.phase == TaskPhase.ToPick) return t.pallet;
+            foreach (var t in w.Tasks) if (t.kind == TaskKind.Outbound && t.phase == TaskPhase.Released) return t.pallet;
+            foreach (var t in w.OutboundWaiting) return t.pallet;
+            return -1;
+        }
+
+        static readonly string[] InboundStages = { "입고 컨베이어", "리프트", "P&D 도착", "셔틀 운반", "보관 완료" };
+        static readonly string[] OutboundStages = { "출고 지시", "셔틀 운반", "P&D 대기", "리프트", "출하 완료" };
+
+        /// <summary>Kind of journey a pallet is on now: 0 inbound, 1 outbound, -1 none (stored, no order).</summary>
+        static int PalletKind(SimWorld w, int p)
+        {
+            w.FindPallet(p, out _, out int level, out var task);
+            if (task != null) return task.kind == TaskKind.Inbound ? 0 : 1;
+            foreach (var q in w.InboundQueue) if (q.pallet == p) return 0;
+            foreach (var l in w.Lifts) if (l.pallet == p) return l.outboundJob ? 1 : 0;
+            if (level >= 0)
+                foreach (var l in w.Lifts) if (w.PalletAt[level][l.site.pdCell] == p) return 1; // on a P&D without a task: waiting for the lift
+            return -1;
+        }
+
+        /// <summary>Stage 0..4 of a pallet's inbound (kind 0) or outbound (kind 1) journey; 4 = finished.</summary>
+        static int PalletStage(SimWorld w, int p, int kind)
+        {
+            bool found = w.FindPallet(p, out _, out int level, out var task);
+            if (kind == 0)
+            {
+                if (!found) return 4;
+                foreach (var q in w.InboundQueue) if (q.pallet == p) return 0;
+                foreach (var l in w.Lifts) if (l.pallet == p && !l.outboundJob) return l.phase <= 2 ? 0 : 1;
+                foreach (var s in w.Shuttles) if (s.carried == p) return 3;
+                if (task != null) return task.phase == TaskPhase.ToDrop ? 3 : 2;
+                return 4;   // stored in a lane, job done
+            }
+            if (!found) return 4;
+            foreach (var l in w.Lifts) if (l.pallet == p && l.outboundJob) return 3;
+            foreach (var s in w.Shuttles) if (s.carried == p) return 1;
+            if (task != null) return task.phase == TaskPhase.ToDrop ? 1 : 0;
+            return 2;       // on the P&D, waiting for / being loaded by the lift
         }
 
         // ------------------------------------------------------------------ theme
@@ -221,6 +322,7 @@ namespace ShuttleRL
             btnText = Text(12, t.text); btnText.alignment = TextAnchor.MiddleCenter; btnText.padding = new RectOffset(10, 10, 0, 0);
             btnTextOn = new GUIStyle(btnText) { normal = { textColor = t.onAccent } };
             btnTextOff = new GUIStyle(btnText) { normal = { textColor = t.faint } };
+            btnTextOffLeft = Text(13, t.faint);
             foreach (var st in new[] { titleStyle, labelStyle, valueStyle, valueRight, bigStyle, timeStyle, headStyle })
                 if (st.alignment != TextAnchor.MiddleRight) st.alignment = TextAnchor.MiddleLeft;
 
@@ -458,7 +560,7 @@ namespace ShuttleRL
         {
             var r = BarRect; Panel(r);
             var cam = Cam;
-            bool wide = Screen.width >= 1600;
+            bool wide = Screen.width >= 1700;
             GUILayout.BeginArea(new Rect(r.x + 16, r.y + (r.height - 30f) / 2f, r.width - 32, 30f));
             GUILayout.BeginHorizontal();
 
@@ -488,21 +590,24 @@ namespace ShuttleRL
             {
                 if (Btn("전체")) cam.FrameAll();
                 if (Btn("처음")) cam.ResetView();
-                if (Btn("위")) cam.TopView();
-                if (Btn("옆")) cam.SideView();
-                if (wide && Btn("확대")) cam.Zoom(0.8f);
-                if (wide && Btn("축소")) cam.Zoom(1.25f);
-                var target = SelectedTransform();
-                bool following = cam.follow != null;
-                if (Btn("따라가기", Kind.Ghost, following, 0, target != null || following)) cam.Follow(following ? null : target, 8f);
-                if (Btn("도움말", Kind.Ghost, cam.showHelp)) Later(() => cam.showHelp = !cam.showHelp);
+                if (wide && Btn("위")) cam.TopView();
+                if (wide && Btn("옆")) cam.SideView();
                 VSep();
+                GUILayout.Label("따라가기", labelStyle, GUILayout.Height(28));
+                int fm = (int)cam.followMode;
+                bool canFollow = sel != Sel.None || track != Track.Off;
+                int nfm = Segmented(fm, new[] { "끄기", "뒤에서", "전체" }, 156f, new[] { true, canFollow, canFollow });
+                if (nfm != fm) SetFollow((RackCameraController.FollowMode)nfm);
+                VSep();
+                GUILayout.Label("화물 추적", labelStyle, GUILayout.Height(28));
+                int tr = Segmented((int)track, new[] { "끄기", "입고", "출고" }, 144f);
+                if (tr != (int)track) { var nt = (Track)tr; Later(() => StartTracking(nt)); }
+                VSep();
+                if (Btn("도움말", Kind.Ghost, cam.showHelp)) Later(() => cam.showHelp = !cam.showHelp);
             }
             if (Btn("설정", Kind.Ghost, showLeft)) Later(() => showLeft = !showLeft);
             if (Btn("정보", Kind.Ghost, showRight)) Later(() => showRight = !showRight);
             if (Btn("이벤트", Kind.Ghost, showEvents)) Later(() => showEvents = !showEvents);
-            VSep();
-            SetTheme(Segmented(themeIndex, new[] { "다크", "라이트" }, 112f));
 
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
@@ -532,7 +637,7 @@ namespace ShuttleRL
                 draft = c.Clone();
             }
             env.RestartEpisode();
-            if (sel == Sel.Shuttle && selId >= env.World.Shuttles.Count) ClearSelection();
+            if ((sel == Sel.Shuttle && selId >= env.World.Shuttles.Count) || sel == Sel.Lift || sel == Sel.Pallet) ClearSelection();
         }
 
         /// <summary>Content column inside a panel: narrower than the area so nothing ever scrolls sideways.</summary>
@@ -548,6 +653,9 @@ namespace ShuttleRL
             GUILayout.Label("설정", titleStyle, GUILayout.Height(26));
             leftScroll = Scroll(leftScroll);
             GUILayout.BeginVertical(GUILayout.Width(ColumnWidth(inner)));
+
+            Section("화면 테마");
+            SetTheme(Segmented(themeIndex, new[] { "다크", "라이트" }));
 
             // ---------------- simulation
             Section("시뮬레이션");
@@ -706,7 +814,7 @@ namespace ShuttleRL
                 GUI.Label(new Rect(row.x + 6, row.y, 36, row.height), $"S{s.id}", valueStyle);
                 GUI.Label(new Rect(row.x + 42, row.y, 120, row.height), $"{s.level + 1}층 {ActName(s.act)}{(s.loaded ? " · 적재" : "")}", labelStyle);
                 BarAt(new Rect(row.x + 166, row.y + 10, row.width - 172, 6), w.Time > 0 ? (float)(s.busyTime / w.Time) : 0f, new Color(0.96f, 0.62f, 0.2f));
-                if (GUI.Button(row, GUIContent.none, GUIStyle.none)) { int id = s.id; Later(() => Select(Sel.Shuttle, id)); }
+                if (GUI.Button(row, GUIContent.none, GUIStyle.none)) { int id = s.id; Later(() => { track = Track.Off; Select(Sel.Shuttle, id); }); }
             }
 
             Section("리프트");
@@ -747,17 +855,20 @@ namespace ShuttleRL
             GUILayout.Space(4);
             if (sel == Sel.Shuttle && selId < w.Shuttles.Count) DrawShuttle(w, w.Shuttles[selId]);
             else if (sel == Sel.Pallet) DrawPallet(w, selId);
-            else GUILayout.Label("화면에서 셔틀이나 화물을 왼쪽 클릭하면 속성이 여기에 보입니다. 선택한 대상은 윤곽선으로 표시됩니다.", eventStyle);
+            else if (sel == Sel.Lift && selId < w.Lifts.Count) DrawLift(w, selId);
+            else DrawEnvironment(w);
             if (sel != Sel.None)
             {
-                GUILayout.Space(12);
-                GUILayout.BeginHorizontal();
-                var cam = Cam; var target = SelectedTransform();
-                bool following = cam != null && cam.follow != null;
-                if (cam != null && Btn(following ? "따라가기 끄기" : "카메라 따라가기", Kind.Soft, following, 0, target != null || following, true))
-                    cam.Follow(following ? null : target, 8f);
-                if (Btn("선택 해제", Kind.Soft)) Later(ClearSelection);
-                GUILayout.EndHorizontal();
+                Section("카메라");
+                var cam = Cam;
+                if (cam != null)
+                {
+                    int fm = (int)cam.followMode;
+                    int nfm = Segmented(fm, new[] { "고정", "뒤에서 따라가기", "전체 뷰로" });
+                    if (nfm != fm) SetFollow((RackCameraController.FollowMode)nfm);
+                }
+                GUILayout.Space(6);
+                if (Btn("선택 해제", Kind.Soft, false, 0, true, true)) Later(ClearSelection);
             }
         }
 
@@ -810,7 +921,10 @@ namespace ShuttleRL
 
         void DrawPallet(SimWorld w, int pallet)
         {
-            Title("파렛트", $"P{pallet}");
+            Title(track != Track.Off ? (track == Track.Inbound ? "입고 화물 추적" : "출고 화물 추적") : "파렛트", $"P{pallet}");
+            int kind = PalletKind(w, pallet);
+            if (kind >= 0) selPalletKind = kind;
+            if (selPalletKind >= 0) Journey(selPalletKind == 0 ? InboundStages : OutboundStages, PalletStage(w, pallet, selPalletKind));
             if (!w.FindPallet(pallet, out var where, out int level, out var task))
             {
                 Row("위치", "출고됨 (시스템 밖)");
@@ -830,6 +944,79 @@ namespace ShuttleRL
                 Row("경과", $"{w.Time - task.created:F0} s");
             }
             else Row("작업", "보관 중");
+        }
+
+        /// <summary>Journey timeline: finished steps, the current step highlighted, steps still to come.</summary>
+        void Journey(string[] steps, int current)
+        {
+            GUILayout.Space(2);
+            for (int i = 0; i < steps.Length; i++)
+            {
+                Rect r = GUILayoutUtility.GetRect(10f, 24f, GUILayout.ExpandWidth(true), GUILayout.Height(24f));
+                bool done = i < current || current == steps.Length - 1;
+                bool now = i == current && current < steps.Length - 1;
+                if (i < steps.Length - 1) Tex(new Rect(r.x + 6.5f, r.y + 15f, 1f, 18f), barTex, i < current ? T.accent : T.track);
+                var dot = now ? new Rect(r.x + 1, r.y + 5, 12, 12) : new Rect(r.x + 3, r.y + 7, 8, 8);
+                Tex(dot, circleTex, done || now ? T.accent : T.track);
+                GUI.Label(new Rect(r.x + 22, r.y, r.width - 22, r.height), steps[i], now ? valueStyle : done ? labelStyle : btnTextOffLeft);
+            }
+            GUILayout.Space(6);
+        }
+
+        void DrawLift(SimWorld w, int i)
+        {
+            var l = w.Lifts[i];
+            Title("리프트", $"리프트{i + 1}");
+            Row("위치", $"통로 {l.site.aisle + 1} · {(l.site.end == 0 ? "앞쪽" : "뒤쪽")} 끝");
+            Row("현재 높이", $"{w.LiftLevel(l, w.Time) + 1f:0.0}층");
+            Row("상태", LiftState(l));
+            Row("작업", l.phase == 0 ? "없음" : l.outboundJob ? "출고" : "입고");
+            if (l.phase != 0) Row("목표 층", $"{l.targetLevel + 1}층");
+            int pal = l.pallet;
+            if (pal < 0 && l.outboundJob && l.phase == 2) pal = w.PalletAt[l.targetLevel][l.site.pdCell];
+            Row("화물", pal >= 0 ? $"P{pal}" : "없음");
+            Section("성능");
+            Row("속도 / 가속", $"{w.Cfg.liftSpeed:0.0} m/s · {w.Cfg.liftAccel:0.0} m/s²");
+            Row("이송 (롤러)", $"{w.Cfg.LiftTransferTime:0.0} s");
+            if (pal >= 0)
+            {
+                GUILayout.Space(6);
+                if (Btn($"화물 P{pal} 선택", Kind.Soft, false, 0, true, true)) Later(() => Select(Sel.Pallet, pal));
+            }
+        }
+
+        void DrawEnvironment(SimWorld w)
+        {
+            var c = w.Cfg; var L = w.Layout;
+            Title("환경", "셔틀 랙");
+            GUILayout.Label("셔틀, 화물, 리프트를 클릭하면 그 속성이 보입니다. 빈 곳을 클릭하면 이 화면으로 돌아옵니다.", smallStyle);
+            int storage = 0;
+            for (int i = 0; i < L.CellCount; i++) if (L.Type[i] == CellType.Lane) storage++;
+            int stored = 0;
+            for (int lv = 0; lv < c.levels; lv++) for (int i = 0; i < L.CellCount; i++) if (L.Type[i] == CellType.Lane && w.PalletAt[lv][i] >= 0) stored++;
+            Section("랙 구성");
+            Row("층 수", $"{c.levels}층");
+            Row("메인 통로", $"{c.aisles}개");
+            Row("레인", $"통로당 {c.lanesPerAisle}열 · 양쪽");
+            Row("레인당 셀", $"{c.cellsPerLane}셀");
+            Row("보관 셀", $"{storage * c.levels}칸 (층당 {storage})");
+            Row("적재", $"{stored}개 ({(storage > 0 ? 100f * stored / (storage * c.levels) : 0f):F0}%)");
+            Row("셔틀", $"{w.Shuttles.Count}대 (층당 {c.shuttlesPerLevel})");
+            Row("리프트", c.liftCountOverride > 0 ? $"{w.Lifts.Count}대 (직접 지정)" : $"{w.Lifts.Count}대 (자동)");
+            Section("물동량");
+            Row("입고량", $"{c.inboundPerHour:0}/h");
+            Row("출고량", $"{c.outboundPerHour:0}/h");
+            Row("에피소드 길이", $"{c.episodeSeconds / 60f:0}분");
+            Row("교착 판정", $"{c.deadlockSeconds:0}초");
+            Section("셔틀 성능");
+            Row("속도 (빈 차 / 적재)", $"{c.shuttleSpeedEmpty:0.0} / {c.shuttleSpeedLoaded:0.0} m/s");
+            Row("가속도", $"{c.shuttleAccel:0.0} m/s²");
+            Row("잭 / 바퀴 전환", $"{c.jackTime:0.0} / {c.wheelSwitchTime:0.0} s");
+            Section("치수");
+            Row("셀 (통로 / 레인)", $"{c.pitchAisle:0.00} / {c.pitchLane:0.00} m");
+            Row("층 높이", $"{c.levelHeight:0.00} m");
+            Row("제어", BehaviorName(env.Behavior));
+            Row("시드", c.seed.ToString());
         }
 
         // ---- bottom: event list (fold / unfold)
@@ -878,7 +1065,7 @@ namespace ShuttleRL
                     if (clickable && GUI.Button(row, GUIContent.none, GUIStyle.none)) // click an event to select what it is about
                     {
                         var ev = e;
-                        Later(() => { if (ev.shuttle >= 0) Select(Sel.Shuttle, ev.shuttle); else Select(Sel.Pallet, ev.pallet); });
+                        Later(() => { track = Track.Off; if (ev.shuttle >= 0) Select(Sel.Shuttle, ev.shuttle); else Select(Sel.Pallet, ev.pallet); });
                     }
                     shown++;
                 }

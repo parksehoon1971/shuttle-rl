@@ -123,6 +123,8 @@ namespace ShuttleRL.Core
         int nextPallet, nextTask;
         double nextArrival, nextOrder, lastProgress;
         readonly List<ShuttleTask> outboundWaiting = new List<ShuttleTask>();
+        /// <summary>Outbound orders not yet released to a shuttle (waiting for a free P&amp;D).</summary>
+        public IReadOnlyList<ShuttleTask> OutboundWaiting => outboundWaiting;
         int[] bfsBuf; int[] bfsQueue;
 
         public SimWorld(RackConfig cfg) { Reset(cfg); }

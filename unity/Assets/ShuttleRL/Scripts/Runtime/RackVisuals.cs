@@ -12,10 +12,10 @@ namespace ShuttleRL
                           conveyor, upright, beam, pallet, palletLoad, shuttle;
     }
 
-    /// <summary>Marks a clickable object for the HUD (shuttle index or pallet pool slot).</summary>
+    /// <summary>Marks a clickable object for the HUD (shuttle index, lift index or pallet pool slot).</summary>
     public class RackSelectable : MonoBehaviour
     {
-        public bool isShuttle;
+        public bool isShuttle, isLift;
         public int index;
     }
 
@@ -32,6 +32,7 @@ namespace ShuttleRL
 
         public int ShuttleCount => shuttles.Count;
         public Transform ShuttleTransform(int i) { return i >= 0 && i < shuttles.Count ? shuttles[i].t : null; }
+        public Transform LiftTransform(int i) { return i >= 0 && i < carriages.Count ? carriages[i] : null; }
         public int SlotPallet(int slot) { return slot >= 0 && slot < slotPallet.Count ? slotPallet[slot] : -1; }
         /// <summary>Transform currently showing the pallet, or null.</summary>
         public Transform PalletTransform(int pallet)
@@ -125,8 +126,14 @@ namespace ShuttleRL
                 float s = g.OutwardSign(site);
                 for (int j = 0; j < 2; j++)
                     Spawn(m.conveyor, staticRoot, conv0 + new Vector3(s * (c.carriageLength / 2f + 1.3f * (j + 0.5f)), 0, 0));
-                var car = Spawn(m.liftCarriage, dynamicRoot, conv0, "LiftCarriage");
-                carriages.Add(car != null ? car.transform : new GameObject("LiftCarriage").transform);
+                // unrotated wrapper (collider, selection) with the imported carriage model inside
+                var wrap = new GameObject($"LiftCarriage_{carriages.Count}");
+                wrap.transform.SetParent(dynamicRoot, false);
+                wrap.transform.localPosition = conv0;
+                var col = wrap.AddComponent<BoxCollider>(); col.center = new Vector3(0, 0.12f, 0); col.size = new Vector3(c.carriageLength, 0.3f, 1.3f);
+                var tag = wrap.AddComponent<RackSelectable>(); tag.isLift = true; tag.index = carriages.Count;
+                Spawn(m.liftCarriage, wrap.transform, Vector3.zero, "Carriage");
+                carriages.Add(wrap.transform);
             }
         }
 

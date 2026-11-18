@@ -18,8 +18,8 @@ namespace ShuttleRL.Core
         public int shuttlesPerLevel = 2;
 
         // ---- Demand -------------------------------------------------------------
-        public float inboundPerHour = 60f;
-        public float outboundPerHour = 60f;
+        public float inboundPerHour = 120f;
+        public float outboundPerHour = 120f;
         public float initialFill = 0.5f;  // fraction of storage cells holding a pallet at reset
         public int liftCountOverride = 0; // 0 = automatic (see ComputeLiftCount)
 

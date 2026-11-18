@@ -18,7 +18,7 @@ namespace ShuttleRL.Editor
             RemoveExisting();
             var template = CreateAgentTemplate(BehaviorType.HeuristicOnly);
             var env = CreateRack("ShuttleRack", Vector3.zero, template, true);
-            env.config = new RackConfig { levels = 3, aisles = 1, lanesPerAisle = 6, cellsPerLane = 6, shuttlesPerLevel = 2, inboundPerHour = 90, outboundPerHour = 90 };
+            env.config = new RackConfig { levels = 3, aisles = 1, lanesPerAisle = 6, cellsPerLane = 6, shuttlesPerLevel = 3, inboundPerHour = 130, outboundPerHour = 130 }; // busy enough to watch
             env.useEnvironmentParameters = false;
 
             var cam = Camera.main;
