@@ -37,7 +37,10 @@ Unity를 켜 둔 상태여도 됩니다. 창으로 돌아오면 스크립트와 
 
 기존 Unity 프로젝트에서 쓰고 싶으면 `unity/Assets/ShuttleRL` 폴더를 그 프로젝트의 `Assets`에 복사해도 되지만, 그 경우 업데이트는 다시 복사해야 합니다.
 
-Hub의 "Built-In Render Pipeline 지원 중단" 경고와 Input Manager 경고는 실행을 막지 않습니다. 이 프로젝트는 키보드 입력을 쓰지 않고, 학습은 화면 없이 돌기 때문에 지금은 Built-In 그대로 둡니다.
+**렌더 파이프라인(URP):** 프로젝트를 처음 열면 `ShuttleRLUrpSetup` 스크립트가 자동으로 (1) 이 에디터 버전에 맞는 URP 패키지를 설치하고, (2) `Assets/ShuttleRL/Settings`에 URP 에셋을 만들어 Graphics/Quality 설정에 지정하고, (3) 모델을 다시 불러와 재질을 URP Lit으로 바꿉니다. 설치 후 Unity가 한 번 다시 컴파일하는 동안 기다리면 됩니다. 자동으로 안 됐으면 메뉴 **ShuttleRL → Set Up URP**를 누르세요.
+URP 설치로 `unity/Packages/manifest.json`에 URP 한 줄이 PC에서만 추가되는데, 이후 `git pull`에는 지장이 없습니다.
+
+Input Manager 경고는 이 프로젝트가 키보드 입력을 쓰지 않아서 영향이 없습니다.
 
 ## 2. 학습
 1. 새 씬에서 **ShuttleRL → Create Training Scene (8 racks, headless)** 를 실행하고 씬을 저장합니다.
