@@ -35,7 +35,9 @@ namespace ShuttleRL
             if (prefab == null) return null;
             var go = Object.Instantiate(prefab, parent);
             go.transform.localPosition = localPos;
-            go.transform.localRotation = Quaternion.identity;
+            // keep the model's own import rotation (Blender Z-up -> Unity Y-up); overwriting it stood models on end
+            go.transform.localRotation = prefab.transform.localRotation;
+            go.transform.localScale = prefab.transform.localScale;
             if (name != null) go.name = name;
             return go;
         }
@@ -140,6 +142,13 @@ namespace ShuttleRL
             return t;
         }
 
+        /// <summary>World-up offset of d meters expressed in the parent's local space (models may be imported rotated).</summary>
+        static Vector3 Up(Transform child, float d)
+        {
+            var parent = child.parent;
+            return parent != null ? parent.InverseTransformVector(Vector3.up * d) : Vector3.up * d;
+        }
+
         public void Sync(SimWorld w, RackGeometry g)
         {
             if (dynamicRoot == null) return;
@@ -153,9 +162,9 @@ namespace ShuttleRL
                 Vector3 a = g.Cell(s.fromCell, s.level), b = g.Cell(s.toCell, s.level);
                 v.t.localPosition = Vector3.Lerp(a, b, w.MoveProgress(s, now));
                 float jack = w.JackHeight(s, now);
-                if (v.jack) v.jack.localPosition = v.jack0 + Vector3.up * jack * RackGeometry.JackStroke;
-                if (v.wheelsX) v.wheelsX.localPosition = v.wx0 + Vector3.down * (s.axis == 0 ? 0 : -wheelDrop);
-                if (v.wheelsY) v.wheelsY.localPosition = v.wy0 + Vector3.down * (s.axis == 1 ? 0 : -wheelDrop);
+                if (v.jack) v.jack.localPosition = v.jack0 + Up(v.jack, jack * RackGeometry.JackStroke);
+                if (v.wheelsX) v.wheelsX.localPosition = v.wx0 + Up(v.wheelsX, s.axis == 0 ? 0 : wheelDrop);
+                if (v.wheelsY) v.wheelsY.localPosition = v.wy0 + Up(v.wheelsY, s.axis == 1 ? 0 : wheelDrop);
                 bool carrying = s.loaded || s.act == ShuttleAct.JackDown;
                 if (carrying)
                     PalletAt(p++).localPosition = v.t.localPosition + Vector3.up * (RackGeometry.RailHeight + jack * (RackGeometry.JackStroke - 0.01f));

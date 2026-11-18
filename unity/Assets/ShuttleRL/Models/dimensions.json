@@ -39,7 +39,7 @@
   "lift": {
     "carriage_l": 1.4,
     "carriage_w": 1.3,
-    "mast_offset": 0.78
+    "mast_offset": 0.82
   },
   "conveyor": {
     "l": 1.3,

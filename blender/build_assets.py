@@ -41,7 +41,7 @@ D = {
                  "jack_t": 0.010, "jack_stroke": 0.040, "wheel_r": 0.040,
                  "wheel_shift": 0.015},
     "roller": {"r": 0.030, "pitch": 0.100, "len": 0.080},
-    "lift": {"carriage_l": 1.40, "carriage_w": 1.30, "mast_offset": 0.78},
+    "lift": {"carriage_l": 1.40, "carriage_w": 1.30, "mast_offset": 0.82},
     "conveyor": {"l": 1.30, "w": 1.20},
     "upright": {"size": 0.10},
 }
@@ -246,8 +246,11 @@ def build_lift_carriage():
     coll, root = new_asset("LiftCarriage")
     box("Platform", (Lf["carriage_l"], Lf["carriage_w"], 0.05), (0, 0, -0.025), "lift", coll, root)
     rail_pair("LC", Lf["carriage_l"], "X", coll, root, roller_top=True)
+    # guide shoes reach out to the mast guide rails (stop short of them, no overlap)
+    shoe_out = Lf["mast_offset"] - 0.06 - 0.005
     for i, sy in enumerate((-1, 1)):
-        box(f"GuideShoe_{i}", (0.20, 0.08, 0.40), (0, sy * (Lf["mast_offset"] - 0.06), 0.15), "lift", coll, root)
+        w = shoe_out - Lf["carriage_w"] / 2
+        box(f"GuideShoe_{i}", (0.16, w, 0.30), (0, sy * (Lf["carriage_w"] / 2 + w / 2), 0.10), "lift", coll, root)
     # flip-up stops at both conveying ends (Unity toggles)
     for nm, sx in (("Stop_PX", 1), ("Stop_NX", -1)):
         s = empty(nm, coll, root, (sx * (Lf["carriage_l"] / 2 - 0.02), 0, 0))
@@ -258,12 +261,22 @@ def build_lift_carriage():
     return root
 
 def build_lift_mast():
+    """One level of a 4-post lift tower. Bracing lies only in the two side planes (y = +-mast_offset),
+    so the carriage and pallets pass through the tower without hitting anything."""
     Lf = D["lift"]; H = D["level"]["height"]
     coll, root = new_asset("LiftMastSegment")
+    px = Lf["carriage_l"] / 2 + 0.06          # posts just outside the carriage ends
+    py = Lf["mast_offset"]                    # side planes just outside the carriage sides
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            box(f"Post_{sx}_{sy}", (0.08, 0.08, H), (sx * px, sy * py, H / 2), "steel", coll, root)
     for i, sy in enumerate((-1, 1)):
-        box(f"Column_{i}", (0.16, 0.10, H), (0, sy * Lf["mast_offset"], H / 2), "steel", coll, root)
-        box(f"GuideRail_{i}", (0.04, 0.03, H), (0, sy * (Lf["mast_offset"] - 0.065), H / 2), "steel", coll, root)
-    box("TieBeam", (0.10, 2 * Lf["mast_offset"], 0.06), (-0.10, 0, H - 0.03), "steel", coll, root)
+        side = "L" if sy < 0 else "R"
+        # horizontal side rail at the top of the segment, in the side plane only
+        box(f"SideBeam_{side}", (2 * px, 0.06, 0.06), (0, sy * py, H - 0.03), "steel", coll, root)
+        # vertical guide rail in the middle of each side, carried by the side beam
+        box(f"GuideRail_{side}", (0.06, 0.03, H), (0, sy * (py - 0.045), H / 2), "steel", coll, root)
+        box(f"GuideBracket_{side}", (0.06, 0.05, 0.06), (0, sy * (py - 0.01), H - 0.03), "steel", coll, root)
     return root
 
 def build_conveyor():
@@ -316,7 +329,7 @@ def export_fbx(root, out_dir):
     bpy.ops.export_scene.fbx(
         filepath=path, use_selection=True, object_types={"EMPTY", "MESH"},
         apply_unit_scale=True, apply_scale_options="FBX_SCALE_ALL",
-        axis_forward="-Z", axis_up="Y", bake_space_transform=True,
+        axis_forward="-Z", axis_up="Y", bake_space_transform=False,  # baking breaks nested empties
         mesh_smooth_type="FACE", add_leaf_bones=False, bake_anim=False)
     return path
 
