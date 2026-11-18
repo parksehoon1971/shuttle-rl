@@ -32,6 +32,8 @@ namespace ShuttleRL
         [Tooltip("Visual mode: simulated seconds per real second. Training mode jumps straight to the next event.")]
         public float visualTimeScale = 4f;
         public bool trainingMode = false;
+        [Tooltip("Visual mode: stop the simulation clock (HUD play / pause button).")]
+        public bool paused = false;
         [Tooltip("Upper bound of simulated seconds per FixedUpdate in training mode.")]
         public float trainingMaxJump = 30f;
 
@@ -43,6 +45,14 @@ namespace ShuttleRL
         public RackGeometry Geometry { get; private set; }
         public int Episode { get; private set; }
         public RackVisuals Visuals => visuals;
+        public IReadOnlyList<ShuttleAgent> Agents => agents;
+        /// <summary>Sum of all individual and group rewards given in the current episode (for the HUD).</summary>
+        public double EpisodeReward { get; private set; }
+        /// <summary>Summary of the last finished episode (for the HUD).</summary>
+        public struct EpisodeSummary { public bool valid, deadlock; public int episode; public double reward, simSeconds, throughput, utilization; }
+        public EpisodeSummary LastEpisode { get; private set; }
+
+        double stepBudget; // simulated seconds still to run while paused (HUD step button)
 
         readonly List<ShuttleAgent> agents = new List<ShuttleAgent>();
         SimpleMultiAgentGroup group;
@@ -83,7 +93,7 @@ namespace ShuttleRL
             World.LogEvents = buildVisuals && models != null; // event list for the HUD (off while training)
             Geometry = new RackGeometry(World.Cfg, World.Layout);
             EnsureAgents(World.Shuttles.Count);
-            pending = 0;
+            pending = 0; stepBudget = 0; EpisodeReward = 0;
             awaitingDecision = new bool[World.Shuttles.Count];
 
             string key = $"{cfg.levels}/{cfg.aisles}/{cfg.lanesPerAisle}/{cfg.cellsPerLane}/{World.Layout.Lifts.Count}";
@@ -128,6 +138,18 @@ namespace ShuttleRL
             c.episodeSeconds = p.GetWithDefault("episode_seconds", c.episodeSeconds);
         }
 
+        void GiveReward(int i)
+        {
+            float r = World.TakeReward(i);
+            if (r != 0f) { agents[i].AddReward(r); EpisodeReward += r; }
+        }
+
+        void GiveGroupReward()
+        {
+            float r = World.TakeGroupReward();
+            if (r != 0f) { group.AddGroupReward(r); EpisodeReward += r; }
+        }
+
         void EnsureAgents(int count)
         {
             if (agentTemplate == null) { Debug.LogError("RackEnvironment: agentTemplate is not set."); return; }
@@ -152,13 +174,66 @@ namespace ShuttleRL
         void EndEpisode(bool deadlock)
         {
             // flush individual rewards, then end for the whole group
-            for (int i = 0; i < World.Shuttles.Count; i++) agents[i].AddReward(World.TakeReward(i));
-            group.AddGroupReward(World.TakeGroupReward());
+            for (int i = 0; i < World.Shuttles.Count; i++) GiveReward(i);
+            GiveGroupReward();
             RecordStats(deadlock);
+            Summarize(deadlock);
             if (deadlock) group.EndGroupEpisode();
             else group.GroupEpisodeInterrupted(); // time limit, not a terminal state
             Episode++;
             ResetEpisode();
+        }
+
+        void Summarize(bool deadlock)
+        {
+            var st = World.Stats;
+            double hours = System.Math.Max(1e-6, World.Time / 3600.0);
+            LastEpisode = new EpisodeSummary
+            {
+                valid = true, deadlock = deadlock, episode = Episode + 1, reward = EpisodeReward, simSeconds = World.Time,
+                throughput = (st.inboundStored + st.outboundShipped) / hours, utilization = World.Utilization(),
+            };
+        }
+
+        /// <summary>
+        /// Start a new episode now with the current <see cref="config"/> (HUD settings panel / restart button).
+        /// The running episode counts as interrupted, not as a terminal state.
+        /// </summary>
+        public void RestartEpisode()
+        {
+            if (World == null) return;
+            Summarize(false);
+            group.GroupEpisodeInterrupted();
+            Episode++;
+            ResetEpisode();
+        }
+
+        /// <summary>Run the paused simulation for this many simulated seconds.</summary>
+        public void StepSeconds(double seconds) { if (paused) stepBudget += seconds; }
+
+        /// <summary>Behavior type of the shuttle agents (Heuristic = rule-based, Inference = trained model, Default = trainer / model / heuristic).</summary>
+        public BehaviorType Behavior
+        {
+            get
+            {
+                var bp = agentTemplate != null ? agentTemplate.GetComponent<BehaviorParameters>() : null;
+                return bp != null ? bp.BehaviorType : BehaviorType.Default;
+            }
+            set
+            {
+                if (agentTemplate != null) { var t = agentTemplate.GetComponent<BehaviorParameters>(); if (t != null) t.BehaviorType = value; }
+                foreach (var a in agents) { var bp = a.GetComponent<BehaviorParameters>(); if (bp != null && bp.BehaviorType != value) bp.BehaviorType = value; }
+            }
+        }
+
+        /// <summary>Name of the .onnx model assigned to the agents, or null.</summary>
+        public string ModelName
+        {
+            get
+            {
+                var bp = agentTemplate != null ? agentTemplate.GetComponent<BehaviorParameters>() : null;
+                return bp != null && bp.Model != null ? bp.Model.name : null;
+            }
         }
 
         void RecordStats(bool deadlock)
@@ -180,15 +255,23 @@ namespace ShuttleRL
         {
             if (World == null || pending > 0) return;
             double dt = trainingMode ? trainingMaxJump : Time.fixedDeltaTime * visualTimeScale;
+            bool hold = paused && !trainingMode;
+            if (hold)
+            {
+                if (stepBudget <= 0) return;
+                dt = System.Math.Min(dt, stepBudget);
+            }
+            double t0 = World.Time;
             bool need = World.Advance(dt);
-            group.AddGroupReward(World.TakeGroupReward());
+            if (hold) stepBudget -= System.Math.Max(World.Time - t0, need ? 0 : dt);
+            GiveGroupReward();
             if (World.Done) { EndEpisode(World.Deadlocked); return; }
             if (!need) return;
             for (int i = 0; i < World.Shuttles.Count; i++)
             {
                 if (!World.Shuttles[i].awaiting || awaitingDecision[i]) continue;
                 awaitingDecision[i] = true; pending++;
-                agents[i].AddReward(World.TakeReward(i));
+                GiveReward(i);
                 agents[i].RequestDecision();
             }
         }
