@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using ShuttleRL.Core;
 using Unity.MLAgents;
+using Unity.MLAgents.Actuators;
+using Unity.MLAgents.Policies;
 using UnityEngine;
 
 namespace ShuttleRL
@@ -55,7 +57,17 @@ namespace ShuttleRL
         void Start()
         {
             group = new SimpleMultiAgentGroup();
-            if (agentTemplate != null) agentTemplate.gameObject.SetActive(false);
+            if (agentTemplate != null)
+            {
+                agentTemplate.gameObject.SetActive(false);
+                // keep the template in sync with the code (observation size changes between versions)
+                var bp = agentTemplate.GetComponent<BehaviorParameters>();
+                if (bp != null)
+                {
+                    bp.BrainParameters.VectorObservationSize = SimWorld.ObsSize;
+                    bp.BrainParameters.ActionSpec = ActionSpec.MakeDiscrete(SimWorld.ActionCount);
+                }
+            }
             if (Application.isBatchMode) { trainingMode = true; buildVisuals = false; }
             ResetEpisode();
         }
