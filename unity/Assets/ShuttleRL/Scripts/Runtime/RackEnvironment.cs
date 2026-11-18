@@ -232,7 +232,11 @@ namespace ShuttleRL
             get
             {
                 var bp = agentTemplate != null ? agentTemplate.GetComponent<BehaviorParameters>() : null;
-                return bp != null && bp.Model != null ? bp.Model.name : null;
+                if (bp == null) return null;
+                // read by reflection: the model type (ModelAsset) lives in Unity.InferenceEngine, which this assembly does not reference
+                var prop = bp.GetType().GetProperty("Model");
+                var model = prop != null ? prop.GetValue(bp) as UnityEngine.Object : null;
+                return model != null ? model.name : null;
             }
         }
 
