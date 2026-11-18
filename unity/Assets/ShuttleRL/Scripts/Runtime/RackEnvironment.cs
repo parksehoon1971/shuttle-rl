@@ -47,6 +47,10 @@ namespace ShuttleRL
         bool[] awaitingDecision = new bool[0];
         RackVisuals visuals;
         string layoutKey = "";
+        static int instanceCounter;   // distinct seeds per rack without GetInstanceID (obsolete in Unity 6.6)
+        int instanceIndex;
+
+        void Awake() { instanceIndex = instanceCounter++; }
 
         void Start()
         {
@@ -61,7 +65,7 @@ namespace ShuttleRL
         {
             var cfg = config.Clone();
             if (useEnvironmentParameters) ApplyEnvironmentParameters(cfg);
-            cfg.seed = baseSeed + Episode * 7919 + GetInstanceID();
+            cfg.seed = baseSeed + Episode * 7919 + instanceIndex * 104729;
             if (World == null) World = new SimWorld(cfg); else World.Reset(cfg);
             Geometry = new RackGeometry(World.Cfg, World.Layout);
             EnsureAgents(World.Shuttles.Count);
